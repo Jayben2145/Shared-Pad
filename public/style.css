@@ -60,3 +60,14 @@ h1 { margin: 0; font-size: 18px; letter-spacing: .3px; }
 .card button { background: var(--accent); color: #0b1022; font-weight: 600; }
 .card button#gen { background: #22d3ee; } /* teal-ish for generate */
 
+.appbar { gap: 10px; }
+.appbar .back {
+  text-decoration: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 6px 10px; border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: #0f172a;
+  color: var(--text);
+  font-size: 14px;
+}
+.appbar .back:hover { border-color: rgba(255,255,255,.25); }
