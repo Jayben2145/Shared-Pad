@@ -6,8 +6,9 @@ block content
     div.status
       span#users 0 online
       span#sync Synced
+
   main.container
-    //- Put the room name in a data- attribute for the client script
     textarea#pad(data-room=room placeholder="Start typing… this pad is shared with anyone on key '#{room}'." autofocus)
+
   footer.foot
-    p This pad is public to anyone who knows the key.
+    p ⚠️ This is a simple shared text pad. It is <strong>not a secure or encrypted transfer service</strong>. Do not paste secrets.
