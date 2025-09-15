@@ -1,0 +1,12 @@
+extends layout
+
+block content
+  header.appbar
+    h1 Shared Pad
+    div.status
+      span#users 0 online
+      span#sync Synced
+  main.container
+    textarea#pad(placeholder="Start typing… everyone here sees this live." autofocus)
+  footer.foot
+    p Small shared text area. Changes are public to anyone with the URL.

@@ -1,0 +1,11 @@
+doctype html
+html(lang="en")
+  head
+    meta(charset="utf-8")
+    meta(name="viewport", content="width=device-width, initial-scale=1")
+    title #{title} · Shared Pad
+    link(rel="stylesheet", href="/style.css")
+  body
+    block content
+    script(src="/socket.io/socket.io.js")
+    script(src="/client.js")
