@@ -36,3 +36,22 @@ h1 { margin: 0; font-size: 18px; letter-spacing: .3px; }
 }
 #pad:focus { border-color: rgba(96,165,250,.8); box-shadow: 0 0 0 3px rgba(96,165,250,.25); }
 .foot { text-align: center; color: var(--muted); padding: 16px; font-size: 13px; }
+
+.card {
+  max-width: 480px;
+  margin: 32px auto;
+  padding: 16px;
+  background: rgba(17,24,39,0.8);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 12px;
+  display: grid;
+  gap: 10px;
+}
+.card label { color: var(--muted); font-size: 13px; }
+.card input {
+  padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,.12);
+  background: #0f172a; color: var(--text); outline: none;
+}
+.card button {
+  padding: 10px 12px; border-radius: 10px; border: 0; cursor: pointer;
+}

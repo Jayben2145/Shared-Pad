@@ -4,11 +4,13 @@
   const users = document.getElementById('users');
   const sync = document.getElementById('sync');
 
+  const room = pad ? pad.dataset.room : null;
   let applyingRemote = false;
   let lastAppliedVersion = 0;
   let pendingTimer = null;
 
   function setSync(state) {
+    if (!sync) return;
     sync.classList.remove('ok', 'busy');
     if (state === 'busy') {
       sync.textContent = 'Syncing…';
@@ -19,8 +21,12 @@
     }
   }
 
-  // init from server
+  if (room) {
+    socket.emit('join', { room });
+  }
+
   socket.on('init', ({ text, version }) => {
+    if (!pad) return;
     applyingRemote = true;
     pad.value = text || '';
     applyingRemote = false;
@@ -28,21 +34,18 @@
     setSync('ok');
   });
 
-  // user count
   socket.on('user-count', (n) => {
-    users.textContent = `${n} online`;
+    if (users) users.textContent = `${n} online`;
   });
 
-  // apply remote updates
   socket.on('text-apply', ({ text, version }) => {
-    if (typeof text !== 'string') return;
+    if (!pad || typeof text !== 'string') return;
     if (!version || version <= lastAppliedVersion) return;
     const start = pad.selectionStart, end = pad.selectionEnd;
     applyingRemote = true;
     pad.value = text;
     applyingRemote = false;
     lastAppliedVersion = version;
-    // try keep caret if possible
     try {
       const len = pad.value.length;
       pad.selectionStart = Math.min(start, len);
@@ -51,15 +54,16 @@
     setSync('ok');
   });
 
-  // throttle user input → send to server
   function sendUpdate() {
-    if (applyingRemote) return;
+    if (!pad || applyingRemote) return;
     setSync('busy');
-    socket.emit('text-update', { text: pad.value });
+    socket.emit('text-update', { room, text: pad.value });
   }
-  pad.addEventListener('input', () => {
-    clearTimeout(pendingTimer);
-    // light debounce to avoid spamming
-    pendingTimer = setTimeout(sendUpdate, 60);
-  });
+
+  if (pad) {
+    pad.addEventListener('input', () => {
+      clearTimeout(pendingTimer);
+      pendingTimer = setTimeout(sendUpdate, 60);
+    });
+  }
 })();
