@@ -1,0 +1,25 @@
+extends layout
+
+block content
+  header.appbar
+    a.back(href="/" title="Back to home") ← Back
+    h1 PDF → JPG
+    div.status Server-side conversion using poppler
+
+  main.container
+    form.card(action="/tools/pdf-to-jpg" method="post" enctype="multipart/form-data")
+      label(for="pdf") Select PDF (max 25MB)
+      input(type="file" name="pdf" id="pdf" accept="application/pdf" required)
+
+      .row
+        .field
+          label(for="width") Max width (px)
+          input(type="number" id="width" name="width" value="1600" min="300" max="4096")
+        .field
+          label(for="quality") JPG quality (1–100)
+          input(type="number" id="quality" name="quality" value="85" min="1" max="100")
+
+      button(type="submit") Convert
+
+  footer.foot
+    p ⚠️ This tool is for convenience only and is <strong>not secure</strong>. Don’t upload sensitive PDFs. Files are converted in-memory and discarded after download.

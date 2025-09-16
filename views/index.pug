@@ -2,36 +2,17 @@ extends layout
 
 block content
   header.appbar
-    h1 Shared Pad
-    div.status
-      span Enter a key to open a pad
+    h1 Tools
+    div.status Welcome! Pick a tool.
 
   main.container
-    form(action="/pad", method="get", class="card", id="roomForm")
-      label(for="room") Enter a key / pin
-      .row
-        input#room(type="text" name="room" placeholder="e.g. bob123" required minlength="1" maxlength="64" pattern="[A-Za-z0-9_-]+")
-        button(type="submit" title="Go to this pad") Go
-        button#gen(type="button" title="Generate a random 6-char key") Generate
+    .grid
+      a.card(href="/pad")
+        h2 Shared Pad
+        p A simple realtime text pad. Enter a key to share.
+      a.card(href="/tools/pdf-to-jpg")
+        h2 PDF → JPG
+        p Convert a PDF into JPG images (server-side).
 
   footer.foot
-    p ⚠️ This is a simple shared text pad. It is <strong>not a secure or encrypted transfer service</strong>. Do not paste secrets.
-
-  //- Tiny inline script to generate a 6-char alphanumeric key and submit
-  script.
-    (function () {
-      var btn = document.getElementById('gen');
-      var input = document.getElementById('room');
-      var form = document.getElementById('roomForm');
-      if (!btn || !input || !form) return;
-      function genKey() {
-        var alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'; // no 0/O/I/l
-        var out = '';
-        for (var i = 0; i < 6; i++) out += alphabet[Math.floor(Math.random() * alphabet.length)];
-        return out;
-      }
-      btn.addEventListener('click', function () {
-        input.value = genKey();
-        form.submit();
-      });
-    })();
+    p ⚠️ These tools are for convenience only and are <strong>not secure or encrypted</strong>. Don’t upload sensitive files or paste secrets.

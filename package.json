@@ -1,14 +1,16 @@
 {
   "name": "shared-pad",
-  "version": "1.0.0",
-  "description": "Ultra-simple realtime shared text pad (Express + Pug + Socket.IO)",
+  "version": "1.1.0",
+  "description": "Shared Pad + Tools (PDF→JPG)",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "NODE_ENV=development nodemon server.js"
   },
   "dependencies": {
+    "archiver": "^6.0.2",
     "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
     "pug": "^3.0.3",
     "socket.io": "^4.7.5"
   },

@@ -14,8 +14,11 @@ body {
   background: linear-gradient(180deg, var(--bg), #0b1022);
   color: var(--text);
 }
+
+/* App bar / status */
 .appbar {
   display: flex; align-items: center; justify-content: space-between;
+  gap: 10px;
   padding: 12px 16px; background: rgba(17,24,39,0.75); backdrop-filter: blur(8px);
   border-bottom: 1px solid rgba(255,255,255,0.08);
   position: sticky; top: 0; z-index: 10;
@@ -24,43 +27,6 @@ h1 { margin: 0; font-size: 18px; letter-spacing: .3px; }
 .status { display: flex; gap: 12px; font-size: 13px; color: var(--muted); }
 #sync.ok { color: var(--ok); }
 #sync.busy { color: var(--accent); }
-.container {
-  max-width: 960px; margin: 24px auto; padding: 0 16px;
-}
-#pad {
-  width: 100%; min-height: 70vh; resize: vertical;
-  padding: 16px; font-size: 16px; line-height: 1.55;
-  color: var(--text); background: var(--panel); border: 1px solid rgba(255,255,255,.08);
-  border-radius: 12px; outline: none;
-  box-shadow: 0 10px 30px rgba(0,0,0,.25);
-}
-#pad:focus { border-color: rgba(96,165,250,.8); box-shadow: 0 0 0 3px rgba(96,165,250,.25); }
-.foot { text-align: center; color: var(--muted); padding: 16px; font-size: 13px; }
-
-.card {
-  max-width: 480px;
-  margin: 32px auto;
-  padding: 16px;
-  background: rgba(17,24,39,0.8);
-  border: 1px solid rgba(255,255,255,.08);
-  border-radius: 12px;
-  display: grid;
-  gap: 10px;
-}
-.card label { color: var(--muted); font-size: 13px; }
-.card input {
-  padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,.12);
-  background: #0f172a; color: var(--text); outline: none;
-}
-.card button {
-  padding: 10px 12px; border-radius: 10px; border: 0; cursor: pointer;
-}
-
-.row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; }
-.card button { background: var(--accent); color: #0b1022; font-weight: 600; }
-.card button#gen { background: #22d3ee; } /* teal-ish for generate */
-
-.appbar { gap: 10px; }
 .appbar .back {
   text-decoration: none;
   display: inline-flex; align-items: center; justify-content: center;
@@ -71,3 +37,51 @@ h1 { margin: 0; font-size: 18px; letter-spacing: .3px; }
   font-size: 14px;
 }
 .appbar .back:hover { border-color: rgba(255,255,255,.25); }
+
+/* Layout */
+.container { max-width: 960px; margin: 24px auto; padding: 0 16px; }
+.foot { text-align: center; color: var(--muted); padding: 16px; font-size: 13px; }
+
+/* Shared Pad textarea */
+#pad {
+  width: 100%; min-height: 70vh; resize: vertical;
+  padding: 16px; font-size: 16px; line-height: 1.55;
+  color: var(--text); background: var(--panel); border: 1px solid rgba(255,255,255,.08);
+  border-radius: 12px; outline: none;
+  box-shadow: 0 10px 30px rgba(0,0,0,.25);
+}
+#pad:focus { border-color: rgba(96,165,250,.8); box-shadow: 0 0 0 3px rgba(96,165,250,.25); }
+
+/* Cards / grid for Tools hub */
+.grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill,minmax(260px,1fr));
+}
+.card {
+  padding: 16px;
+  background: rgba(17,24,39,0.8);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 12px;
+  display: block;
+  text-decoration: none;
+  color: inherit;
+}
+.card h2 { margin: 0 0 6px; font-size: 18px; }
+.card p { margin: 0; color: var(--muted); }
+
+/* Forms / buttons */
+.row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; }
+.field { display: grid; gap: 6px; }
+.card button {
+  background: var(--accent); color: #0b1022; font-weight: 600;
+  border: 0; padding: 10px 12px; border-radius: 10px; cursor: pointer;
+}
+#gen { background: #22d3ee; }
+
+/* Inputs */
+.card input, .card select {
+  padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,.12);
+  background: #0f172a; color: var(--text); outline: none;
+}
+.card input:focus { border-color: rgba(96,165,250,.8); box-shadow: 0 0 0 3px rgba(96,165,250,.25); }
