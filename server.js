@@ -107,10 +107,13 @@ app.get('/', (_req, res) => {
   res.render('index', { title: 'Tools' });
 });
 
-// Shared Pad landing (enter key)
+// Shared Pad landing (enter key) — also handle ?room=XYZ and redirect
 app.get('/pad', (req, res) => {
-  res.render('pad-index', { title: 'Shared Pad' });
+  const room = sanitizeRoom(req.query.room);
+  if (room) return res.redirect(`/pad/${room}`);
+  return res.render('pad-index', { title: 'Shared Pad' });
 });
+
 
 // Specific pad
 app.get('/pad/:room', (req, res) => {
