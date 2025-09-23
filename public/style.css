@@ -85,3 +85,10 @@ h1 { margin: 0; font-size: 18px; letter-spacing: .3px; }
   background: #0f172a; color: var(--text); outline: none;
 }
 .card input:focus { border-color: rgba(96,165,250,.8); box-shadow: 0 0 0 3px rgba(96,165,250,.25); }
+
+
+.card h2 { margin: 0 0 10px; }
+.card ul { list-style: none; padding: 0; margin: 0; }
+.card li { padding: 6px 0; border-bottom: 1px dashed rgba(255,255,255,.08); }
+.card li:last-child { border-bottom: 0; }
+.card form button { margin-left: 6px; }

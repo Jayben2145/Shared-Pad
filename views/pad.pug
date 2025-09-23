@@ -11,5 +11,26 @@ block content
   main.container
     textarea#pad(data-room=room placeholder="Start typing… this pad is shared with anyone on key '#{room}'." autofocus)
 
+    .card
+      h2 Files for this pad
+      form(method="post" action=`/pad/${room}/files` enctype="multipart/form-data" style="margin-bottom:10px")
+        input(type="file" name="file" required)
+        button(type="submit") Upload
+
+      // Server-rendered initial list; will be replaced live via Socket.IO
+      if files && files.length
+        ul#file-list
+          each f in files
+            li
+              a(href=`/pad/${room}/files/${encodeURIComponent(f)}`)= f
+              |  ·
+              form(style="display:inline" method="post" action=`/pad/${room}/files/${encodeURIComponent(f)}/delete`)
+                button(type="submit" onclick="return confirm('Delete this file?')") Delete
+      else
+        ul#file-list
+          li(style="color:#9ca3af") No files uploaded yet.
+
   footer.foot
-    p ⚠️ This is a simple shared text pad. It is <strong>not a secure or encrypted transfer service</strong>. Do not paste secrets.
+    form(method="post" action="/logout" style="display:inline")
+      button(type="submit" title="Sign out") Log out
+    p ⚠️ This is a simple shared pad. It is <strong>not a secure or encrypted transfer service</strong>. Do not paste secrets.

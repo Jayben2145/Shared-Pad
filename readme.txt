@@ -213,4 +213,6 @@ Socket.IO for realtime updates
 
 Express + Pug for server and views
 
+
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 =====================================================================

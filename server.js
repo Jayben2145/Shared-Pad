@@ -6,28 +6,83 @@ const { Server } = require('socket.io');
 const multer = require('multer');
 const { spawn } = require('child_process');
 const archiver = require('archiver');
+const rateLimit = require('express-rate-limit');
+const cookieSession = require('cookie-session');
+
+const SHARED_PASSWORD = process.env.SHARED_PASSWORD || ''; // set this in prod
+const PORT = process.env.PORT || 3000;
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+/* ------------ IMPORTANT: trust proxy for rate-limit & proxies ----------- */
+app.set('trust proxy', 1); // adjust if you have more than one proxy hop
+
 app.set('view engine', 'pug');
 app.set('views', path.join(__dirname, 'views'));
 app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.urlencoded({ extended: false }));
 
-/* ----------------------- Shared Pad (rooms) ----------------------- */
+// sessions (signed cookies)
+app.use(cookieSession({
+  name: 'sid',
+  keys: [process.env.SESSION_KEY || 'dev-unsafe-key'],
+  maxAge: 24 * 60 * 60 * 1000, // 1 day
+  sameSite: 'lax',
+}));
 
-const PAD_DIR = path.join(__dirname, 'data', 'pads');
-fs.mkdirSync(PAD_DIR, { recursive: true });
+// --- auth helpers ---
+function requireAuth(req, res, next) {
+  if (!SHARED_PASSWORD) return next();     // if no password set, open access
+  if (req.session && req.session.authed === true) return next();
+  return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl || '/'));
+}
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15m
+  max: 10, // 10 attempts per IP per window
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
-const pads = Object.create(null);
-const saveTimers = Object.create(null);
+// --- utils & storage dirs ---
+const DATA_DIR = path.join(__dirname, 'data');
+const PAD_DIR = path.join(DATA_DIR, 'pads');
+const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
+const OUTPUT_DIR = path.join(DATA_DIR, 'outputs');
+const FILES_DIR = path.join(DATA_DIR, 'files');   // per-pad files
+
+for (const d of [DATA_DIR, PAD_DIR, UPLOAD_DIR, OUTPUT_DIR, FILES_DIR]) {
+  fs.mkdirSync(d, { recursive: true });
+}
 
 function sanitizeRoom(input) {
   if (!input) return '';
   return String(input).toLowerCase().replace(/[^a-z0-9-_]/g, '').slice(0, 64);
 }
+function sanitizeFilename(input) {
+  // keep basename, strip traversal, restrict chars
+  const base = path.basename(String(input || ''));
+  return base.replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 128);
+}
 function padFile(room) { return path.join(PAD_DIR, `${room}.json`); }
+function padFilesDir(room) {
+  const dir = path.join(FILES_DIR, room);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+// list files helper (used for SSR and socket/JSON updates)
+function listPadFiles(room) {
+  const dir = padFilesDir(room);
+  return fs.readdirSync(dir)
+    .filter(f => fs.statSync(path.join(dir, f)).isFile())
+    .sort((a,b)=>a.localeCompare(b, undefined, { numeric:true }));
+}
+
+// --- pads state ---
+const pads = Object.create(null);
+const saveTimers = Object.create(null);
 function loadPad(room) {
   if (pads[room]) return pads[room];
   try {
@@ -35,8 +90,8 @@ function loadPad(room) {
     if (fs.existsSync(f)) {
       const { text = '', version = 0 } = JSON.parse(fs.readFileSync(f, 'utf8'));
       pads[room] = { text, version };
-    } else pads[room] = { text: '', version: 0 };
-  } catch { pads[room] = { text: '', version: 0 }; }
+    } else pads[room] = { text, version: 0 };
+  } catch { pads[room] = { text, version: 0 }; }
   return pads[room];
 }
 function scheduleSave(room) {
@@ -49,95 +104,150 @@ function scheduleSave(room) {
   }, 250);
 }
 
-/* ------------------------- Tools: PDF→JPG ------------------------- */
-
-const UPLOAD_DIR = path.join(__dirname, 'data', 'uploads');
-const OUTPUT_DIR = path.join(__dirname, 'data', 'outputs');
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-
-const upload = multer({
+// --- multer (uploads) ---
+const uploadPDF = multer({
   dest: UPLOAD_DIR,
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB
-  fileFilter: (req, file, cb) => {
-    if (!/\.pdf$/i.test(file.originalname)) return cb(new Error('Only PDF files are allowed'));
-    cb(null, true);
-  },
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => (/\.pdf$/i.test(file.originalname) ? cb(null, true) : cb(new Error('Only PDF files are allowed')))
+});
+const uploadAny = multer({
+  dest: (req, file, cb) => cb(null, padFilesDir(sanitizeRoom(req.params.room))),
+  limits: { fileSize: 50 * 1024 * 1024 } // 50MB per file
 });
 
-// Run pdftoppm (Poppler) to produce JPEGs.
-// If width is provided, we use -scale-to <width>.
-// Else if dpi is provided, we use -r <dpi>.
-// Else we let pdftoppm use its default DPI (~150).
+// --- converter (pdftoppm) ---
 function pdfToJpg({ pdfPath, outPrefix, width, quality, dpi }) {
   return new Promise((resolve, reject) => {
     const args = ['-jpeg'];
-
-    if (Number.isInteger(width) && width > 0) {
-      args.push('-scale-to', String(width));
-    } else if (Number.isInteger(dpi) && dpi > 0) {
-      args.push('-r', String(dpi));
-    }
-
-    if (Number.isInteger(quality) && quality >= 1 && quality <= 100) {
-      args.push('-jpegopt', `quality=${quality}`);
-    }
-
+    if (Number.isInteger(width) && width > 0) args.push('-scale-to', String(width));
+    else if (Number.isInteger(dpi) && dpi > 0) args.push('-r', String(dpi));
+    if (Number.isInteger(quality) && quality >= 1 && quality <= 100) args.push('-jpegopt', `quality=${quality}`);
     args.push(pdfPath, outPrefix);
-
     const proc = spawn('pdftoppm', args);
     let stderr = '';
     proc.stderr.on('data', d => (stderr += d.toString()));
-    proc.on('error', err => reject(err)); // catches ENOENT nicely
-    proc.on('close', code => {
-      if (code !== 0) return reject(new Error(`pdftoppm exited ${code}: ${stderr}`));
-      resolve();
-    });
+    proc.on('error', err => reject(err));
+    proc.on('close', code => code !== 0 ? reject(new Error(`pdftoppm exited ${code}: ${stderr}`)) : resolve());
   });
 }
+function safeCleanup(paths) { for (const p of paths) fs.unlink(p, () => {}); }
 
-function safeCleanup(paths) {
-  for (const p of paths) fs.unlink(p, () => {});
-}
+// ----------------------------- routes ------------------------------
 
-/* ------------------------------ Routes ---------------------------- */
+// login
+app.get('/login', (req, res) => {
+  if (!SHARED_PASSWORD) return res.redirect('/'); // auth disabled
+  const next = typeof req.query.next === 'string' ? req.query.next : '/';
+  res.render('login', { title: 'Login', next, error: null });
+});
+app.post('/login', loginLimiter, (req, res) => {
+  if (!SHARED_PASSWORD) return res.redirect('/');
+  const { password, next } = req.body || {};
+  if (typeof password === 'string' && password === SHARED_PASSWORD) {
+    req.session.authed = true;
+    return res.redirect(next && next.startsWith('/') ? next : '/');
+  }
+  res.status(401).render('login', { title: 'Login', next: next || '/', error: 'Incorrect password.' });
+});
+app.post('/logout', (req, res) => {
+  req.session = null;
+  res.redirect('/');
+});
 
-// Home = Tools hub
-app.get('/', (_req, res) => {
+// Home (tools hub) - protected
+app.get('/', requireAuth, (_req, res) => {
   res.render('index', { title: 'Tools' });
 });
 
-// Shared Pad landing (enter key) — also handle ?room=XYZ and redirect
-app.get('/pad', (req, res) => {
+// Pads: index (enter key / generate) and handle ?room=XYZ
+app.get('/pad', requireAuth, (req, res) => {
   const room = sanitizeRoom(req.query.room);
   if (room) return res.redirect(`/pad/${room}`);
-  return res.render('pad-index', { title: 'Shared Pad' });
+  res.render('pad-index', { title: 'Shared Pad' });
 });
 
-
 // Specific pad
-app.get('/pad/:room', (req, res) => {
+app.get('/pad/:room', requireAuth, (req, res) => {
   const room = sanitizeRoom(req.params.room);
   if (!room) return res.redirect('/pad');
   loadPad(room);
-  res.render('pad', { title: `Pad: ${room}`, room });
+  const files = listPadFiles(room);
+  res.render('pad', { title: `Pad: ${room}`, room, files });
 });
 
-// Tools: PDF→JPG form
-app.get('/tools/pdf-to-jpg', (_req, res) => {
+// NEW: JSON list of files for a pad (for reliable live refresh)
+app.get('/pad/:room/files.json', requireAuth, (req, res) => {
+  const room = sanitizeRoom(req.params.room);
+  if (!room) return res.status(400).json({ files: [] });
+  try {
+    return res.json({ files: listPadFiles(room) });
+  } catch {
+    return res.json({ files: [] });
+  }
+});
+
+// Upload file to pad
+app.post('/pad/:room/files', requireAuth, uploadAny.single('file'), (req, res) => {
+  try {
+    const room = sanitizeRoom(req.params.room);
+    if (!room) return res.redirect('/pad');
+
+    const original = sanitizeFilename(req.file.originalname || 'file');
+    const ext = path.extname(original) || '';
+    const base = path.basename(original, ext) || 'file';
+    let name = `${base}${ext}`;
+    let i = 1;
+    while (fs.existsSync(path.join(padFilesDir(room), name))) {
+      name = `${base}_${i}${ext}`; i++;
+    }
+    fs.renameSync(req.file.path, path.join(padFilesDir(room), name));
+
+    // broadcast "files changed" (clients will fetch fresh list)
+    io.to(room).emit('files-changed', { room });
+
+    return res.redirect(`/pad/${room}`);
+  } catch (e) {
+    console.error(e);
+    return res.status(400).send('Upload failed');
+  }
+});
+
+// Download a file from pad
+app.get('/pad/:room/files/:file', requireAuth, (req, res) => {
+  const room = sanitizeRoom(req.params.room);
+  const file = sanitizeFilename(req.params.file);
+  const full = path.join(padFilesDir(room), file);
+  if (!fs.existsSync(full)) return res.status(404).send('Not found');
+  res.download(full);
+});
+
+// Delete a file from pad
+app.post('/pad/:room/files/:file/delete', requireAuth, (req, res) => {
+  const room = sanitizeRoom(req.params.room);
+  const file = sanitizeFilename(req.params.file);
+  const full = path.join(padFilesDir(room), file);
+  try {
+    if (fs.existsSync(full)) fs.unlinkSync(full);
+
+    // broadcast "files changed" (clients will fetch fresh list)
+    io.to(room).emit('files-changed', { room });
+
+    return res.redirect(`/pad/${room}`);
+  } catch (e) {
+    console.error(e);
+    return res.status(400).send('Delete failed');
+  }
+});
+
+// Tools: PDF -> JPG
+app.get('/tools/pdf-to-jpg', requireAuth, (_req, res) => {
   res.render('tool_pdf_to_jpg', { title: 'PDF → JPG' });
 });
-
-// Tools: PDF→JPG convert
-app.post('/tools/pdf-to-jpg', upload.single('pdf'), async (req, res) => {
+app.post('/tools/pdf-to-jpg', requireAuth, uploadPDF.single('pdf'), async (req, res) => {
   try {
     const quality = Math.min(100, Math.max(1, parseInt(req.body.quality || '85', 10)));
-    const width = req.body.width && req.body.width !== 'auto'
-      ? Math.min(4096, Math.max(300, parseInt(req.body.width, 10)))
-      : null;
-    const dpi = req.body.dpi
-      ? Math.min(600, Math.max(72, parseInt(req.body.dpi, 10)))
-      : null;
+    const width = req.body.width && req.body.width !== 'auto' ? Math.min(4096, Math.max(300, parseInt(req.body.width, 10))) : null;
+    const dpi = req.body.dpi ? Math.min(600, Math.max(72, parseInt(req.body.dpi, 10))) : null;
 
     const pdfPath = req.file.path;
     const base = path.basename(req.file.filename);
@@ -145,20 +255,16 @@ app.post('/tools/pdf-to-jpg', upload.single('pdf'), async (req, res) => {
 
     await pdfToJpg({ pdfPath, outPrefix: workPrefix, width, quality, dpi });
 
-    // collect generated files: pdf_<base>-1.jpg, pdf_<base>-2.jpg, ...
     const dir = path.dirname(workPrefix);
     const stem = path.basename(workPrefix);
     const files = fs.readdirSync(dir)
       .filter(f => f.startsWith(stem + '-') && f.endsWith('.jpg'))
       .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-
     if (files.length === 0) throw new Error('No pages produced');
 
     if (files.length === 1) {
       const imgPath = path.join(dir, files[0]);
-      res.download(imgPath, files[0], () => {
-        safeCleanup([pdfPath, imgPath]);
-      });
+      res.download(imgPath, files[0], () => safeCleanup([pdfPath, imgPath]));
     } else {
       res.setHeader('Content-Type', 'application/zip');
       res.setHeader('Content-Disposition', 'attachment; filename="pages.zip"');
@@ -170,38 +276,31 @@ app.post('/tools/pdf-to-jpg', upload.single('pdf'), async (req, res) => {
       res.on('finish', () => safeCleanup([pdfPath, ...files.map(f => path.join(dir, f))]));
     }
   } catch (e) {
-    if (e.code === 'ENOENT') {
-      return res
-        .status(500)
-        .send('Converter not available: pdftoppm not found. Install poppler-utils or rebuild the Docker image.');
-    }
+    if (e.code === 'ENOENT') return res.status(500).send('Converter not available: pdftoppm not found.');
     console.error(e);
     res.status(400).send('Conversion failed: ' + e.message);
   }
 });
 
 // health
-app.get('/health', (_req, res) => res.json({ ok: true, pads: Object.keys(pads).length }));
+app.get('/health', (_req, res) => res.json({ ok: true, pads: Object.keys(pads).length, auth: !!SHARED_PASSWORD }));
 
-/* --------------------------- Sockets (pads) ------------------------ */
-
+/* --------------------------- sockets (pads) ------------------------ */
 io.on('connection', (socket) => {
   let currentRoom = null;
-
   socket.on('join', ({ room }) => {
     const r = sanitizeRoom(room);
     if (!r) return;
     if (currentRoom) socket.leave(currentRoom);
     currentRoom = r;
     socket.join(r);
-
     const state = loadPad(r);
     socket.emit('init', { text: state.text, version: state.version, room: r });
-
     const count = io.sockets.adapter.rooms.get(r)?.size || 0;
     io.to(r).emit('user-count', count);
   });
 
+  // IMPORTANT: don't echo the update back to the sender (prevents clobbering)
   socket.on('text-update', ({ room, text }) => {
     const r = sanitizeRoom(room);
     if (!r || typeof text !== 'string') return;
@@ -209,7 +308,8 @@ io.on('connection', (socket) => {
     state.text = text;
     state.version++;
     scheduleSave(r);
-    io.to(r).emit('text-apply', { text: state.text, version: state.version, room: r });
+    socket.to(r).emit('text-apply', { text: state.text, version: state.version, room: r });
+    socket.emit('ack', { version: state.version }); // let sender know we're synced
   });
 
   socket.on('disconnect', () => {
@@ -219,7 +319,6 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`Tools + Shared Pad running on http://localhost:${PORT}`);
 });

@@ -1,4 +1,5 @@
 version: "3.9"
+
 services:
   shared-pad:
     build: .
@@ -7,10 +8,14 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
+      # set these via a .env file or inline before `docker compose up`
+      - SHARED_PASSWORD=${SHARED_PASSWORD}
+      - SESSION_KEY=${SESSION_KEY}
     ports:
       - "3000:3000"
     volumes:
       - sharedpad-data:/usr/src/app/data
     restart: unless-stopped
+
 volumes:
   sharedpad-data:
