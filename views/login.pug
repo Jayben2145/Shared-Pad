@@ -4,7 +4,7 @@ block content
   header.appbar
     h1 Login
     div.status Enter the shared password
-  main.container
+  main.container.login
     form.card(method="post" action="/login")
       input(type="hidden" name="next" value=next)
       if error
