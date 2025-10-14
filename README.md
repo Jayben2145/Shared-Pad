@@ -72,7 +72,7 @@ docker run -d \
   -e NODE_ENV=production \
   -e SHARED_PASSWORD=super-secret \
   -e SESSION_KEY=base64-key-from-node-command \
-  -p 3000:3000 \
+  -p 9550:3000 \
   -v sharedpad-data:/usr/src/app/data \
   shared-pad
 ```

@@ -225,13 +225,17 @@ h1 { margin: 0; font-size: 18px; letter-spacing: .3px; }
   inset: 0;
   cursor: pointer;
 }
-#link-layer, #topology-canvas {
+#link-layer, #label-layer, #topology-canvas {
   position: absolute;
   top: 0;
   left: 0;
 }
 #link-layer {
   z-index: 1;
+}
+#label-layer {
+  z-index: 3;
+  pointer-events: none;
 }
 #topology-canvas {
   z-index: 2;
@@ -341,6 +345,26 @@ h1 { margin: 0; font-size: 18px; letter-spacing: .3px; }
 .link-group.selected .link-label {
   fill: #bfdbfe;
 }
+
+.link-group-label {
+  fill: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: rgba(15,23,42,0.85);
+  stroke-width: 3px;
+}
+.link-group-endpoint {
+  fill: #f9fafb;
+  font-size: 11px;
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: rgba(15,23,42,0.85);
+  stroke-width: 3px;
+}
+.link-group-endpoint--a { text-anchor: end; }
+.link-group-endpoint--b { text-anchor: start; }
 
 .bond-group { cursor: pointer; }
 .bond-circle {

@@ -2,7 +2,14 @@
   const stage = document.querySelector('.workspace-stage');
   const canvas = document.getElementById('topology-canvas');
   const linkLayer = document.getElementById('link-layer');
+  let labelLayer = document.getElementById('label-layer');
   if (!stage || !canvas || !linkLayer) return;
+  if (!labelLayer) {
+    labelLayer = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    labelLayer.setAttribute('id', 'label-layer');
+    labelLayer.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    stage.appendChild(labelLayer);
+  }
 
   const emptyHint = canvas.querySelector('.empty-hint');
   const paletteButtons = document.querySelectorAll('.palette-buttons button');
@@ -76,6 +83,7 @@
     nodes: new Map(),
     links: new Map(),
     bonds: new Map(),
+    linkGroups: new Map(),
     nodeCounter: 1,
     linkCounter: 1,
     bondCounter: 1,
@@ -97,6 +105,13 @@
     linkLayer.setAttribute('viewBox', `0 0 ${state.artboardWidth} ${state.artboardHeight}`);
     linkLayer.style.width = `${state.artboardWidth}px`;
     linkLayer.style.height = `${state.artboardHeight}px`;
+    if (labelLayer) {
+      labelLayer.setAttribute('width', state.artboardWidth);
+      labelLayer.setAttribute('height', state.artboardHeight);
+      labelLayer.setAttribute('viewBox', `0 0 ${state.artboardWidth} ${state.artboardHeight}`);
+      labelLayer.style.width = `${state.artboardWidth}px`;
+      labelLayer.style.height = `${state.artboardHeight}px`;
+    }
     canvas.style.width = `${state.artboardWidth}px`;
     canvas.style.height = `${state.artboardHeight}px`;
   }
@@ -257,6 +272,286 @@
     return result;
   }
 
+  function linkGroupKey(link) {
+    const pair = [link.from, link.to].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    return pair.join('||');
+  }
+
+  function ensureLinkGroup(link) {
+    const key = linkGroupKey(link);
+    let group = state.linkGroups.get(key);
+    if (!group) {
+      const [nodeA, nodeB] = [link.from, link.to].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      const labelEl = document.createElementNS(SVG_NS, 'text');
+      labelEl.classList.add('link-group-label');
+      labelEl.setAttribute('text-anchor', 'middle');
+      labelEl.setAttribute('dominant-baseline', 'middle');
+      labelEl.style.display = 'none';
+      labelEl.style.pointerEvents = 'none';
+
+      const aTextEl = document.createElementNS(SVG_NS, 'text');
+      aTextEl.classList.add('link-group-endpoint', 'link-group-endpoint--a');
+      aTextEl.setAttribute('dominant-baseline', 'middle');
+      aTextEl.style.display = 'none';
+      aTextEl.style.pointerEvents = 'none';
+
+      const bTextEl = document.createElementNS(SVG_NS, 'text');
+      bTextEl.classList.add('link-group-endpoint', 'link-group-endpoint--b');
+      bTextEl.setAttribute('dominant-baseline', 'middle');
+      bTextEl.style.display = 'none';
+      bTextEl.style.pointerEvents = 'none';
+
+      const textLayer = labelLayer || linkLayer;
+      textLayer.appendChild(labelEl);
+      textLayer.appendChild(aTextEl);
+      textLayer.appendChild(bTextEl);
+
+      group = {
+        key,
+        nodeA,
+        nodeB,
+        links: new Set(),
+        labelEl,
+        aTextEl,
+        bTextEl,
+      };
+      state.linkGroups.set(key, group);
+    }
+    group.links.add(link.id);
+    return group;
+  }
+
+  function removeLinkFromGroup(link) {
+    const key = linkGroupKey(link);
+    const group = state.linkGroups.get(key);
+    if (!group) return;
+    group.links.delete(link.id);
+    if (group.links.size === 0) {
+      group.labelEl.remove();
+      group.aTextEl.remove();
+      group.bTextEl.remove();
+      state.linkGroups.delete(key);
+    } else {
+      updateLinkGroupDisplay(key);
+    }
+  }
+
+  function setMultilineText(textEl, lines, x, startY, lineSpacing, anchor = 'start', positions = null) {
+    while (textEl.firstChild) textEl.removeChild(textEl.firstChild);
+    textEl.setAttribute('text-anchor', anchor);
+    const hasContent = lines.some((line) => line && line.trim() !== '');
+    textEl.style.display = hasContent ? 'block' : 'none';
+    if (!hasContent) return;
+    lines.forEach((line, index) => {
+      const tspan = document.createElementNS(SVG_NS, 'tspan');
+      tspan.textContent = line || '';
+      tspan.setAttribute('x', String(x));
+      if (positions && positions[index] !== undefined) {
+        tspan.setAttribute('y', String(positions[index]));
+      } else if (index === 0) {
+        tspan.setAttribute('y', String(startY));
+      } else {
+        tspan.setAttribute('dy', `${lineSpacing}`);
+      }
+      textEl.appendChild(tspan);
+    });
+  }
+
+  function buildLinkGroupLayout(group) {
+    const links = Array.from(group.links)
+      .map((id) => state.links.get(id))
+      .filter(Boolean);
+    if (links.length === 0) return null;
+
+    const records = [];
+    links.forEach((link) => {
+      const geom = link._geom || computeLinkGeometry(link);
+      if (!geom) return;
+      const fromIsA = link.from === group.nodeA;
+      const pointA = fromIsA ? geom.fromPoint : geom.toPoint;
+      const pointB = fromIsA ? geom.toPoint : geom.fromPoint;
+      const dirX = fromIsA ? geom.dirX : -geom.dirX;
+      const dirY = fromIsA ? geom.dirY : -geom.dirY;
+      records.push({
+        link,
+        geom,
+        fromIsA,
+        pointA,
+        pointB,
+        dirX,
+        dirY,
+        metricsA: fromIsA ? geom.fromMetrics : geom.toMetrics,
+        metricsB: fromIsA ? geom.toMetrics : geom.fromMetrics,
+        aText: (fromIsA ? link.aDetails : link.bDetails) || '',
+        bText: (fromIsA ? link.bDetails : link.aDetails) || '',
+        labelText: [link.label, link.notes].filter(Boolean).join(' · '),
+      });
+    });
+    if (records.length === 0) return null;
+
+    const avgA = records.reduce((acc, record) => ({
+      x: acc.x + record.pointA.x,
+      y: acc.y + record.pointA.y,
+    }), { x: 0, y: 0 });
+    avgA.x /= records.length;
+    avgA.y /= records.length;
+
+    const avgB = records.reduce((acc, record) => ({
+      x: acc.x + record.pointB.x,
+      y: acc.y + record.pointB.y,
+    }), { x: 0, y: 0 });
+    avgB.x /= records.length;
+    avgB.y /= records.length;
+
+    const avgMid = records.reduce((acc, record) => ({
+      x: acc.x + (record.pointA.x + record.pointB.x) / 2,
+      y: acc.y + (record.pointA.y + record.pointB.y) / 2,
+    }), { x: 0, y: 0 });
+    avgMid.x /= records.length;
+    avgMid.y /= records.length;
+
+    records.sort((a, b) => {
+      const diffY = a.pointA.y - b.pointA.y;
+      if (Math.abs(diffY) > 4) return diffY;
+      return a.pointA.x - b.pointA.x;
+    });
+    const lineSpacing = 18;
+    let sumDirX = 0;
+    let sumDirY = 0;
+    let maxHalfWidth = 0;
+    let maxHalfHeight = 0;
+    records.forEach((record) => {
+      sumDirX += record.dirX;
+      sumDirY += record.dirY;
+      [record.metricsA, record.metricsB].forEach((metrics) => {
+        if (!metrics) return;
+        const halfWidth = (metrics.width || 0) / 2;
+        const halfHeight = (metrics.height || 0) / 2;
+        if (halfWidth > maxHalfWidth) maxHalfWidth = halfWidth;
+        if (halfHeight > maxHalfHeight) maxHalfHeight = halfHeight;
+      });
+    });
+    let dirLength = Math.hypot(sumDirX, sumDirY);
+    if (dirLength === 0 || !Number.isFinite(dirLength)) {
+      dirLength = 1;
+      sumDirX = 1;
+      sumDirY = 0;
+    }
+    let avgDirX = sumDirX / dirLength;
+    let avgDirY = sumDirY / dirLength;
+    let avgPerpX = -avgDirY;
+    let avgPerpY = avgDirX;
+    const orientation = Math.abs(avgDirX) >= Math.abs(avgDirY) ? 'horizontal' : 'vertical';
+    if (orientation === 'horizontal' && avgPerpY > 0) {
+      avgPerpX *= -1;
+      avgPerpY *= -1;
+    } else if (orientation === 'vertical' && avgPerpX < 0) {
+      avgPerpX *= -1;
+      avgPerpY *= -1;
+    }
+    const perpLength = Math.hypot(avgPerpX, avgPerpY) || 1;
+    avgPerpX /= perpLength;
+    avgPerpY /= perpLength;
+    const blockHalf = (records.length - 1) * lineSpacing / 2;
+    const nodeClearMargin = 36;
+    const endpointPerpOffset = orientation === 'horizontal'
+      ? maxHalfHeight + nodeClearMargin
+      : maxHalfWidth + nodeClearMargin;
+    const labelPerpMargin = endpointPerpOffset + blockHalf + 28;
+    const centerBaseX = avgMid.x + avgPerpX * labelPerpMargin;
+    const centerBaseY = avgMid.y + avgPerpY * labelPerpMargin;
+    const centerPositions = records.map((_, index) => centerBaseY + (index - (records.length - 1) / 2) * lineSpacing);
+    const centerAnchor = orientation === 'vertical'
+      ? (avgPerpX >= 0 ? 'start' : 'end')
+      : 'middle';
+
+    const endpointParallelOffset = 24;
+
+    const aBaseX = avgA.x + avgPerpX * endpointPerpOffset - avgDirX * endpointParallelOffset;
+    const aBaseY = avgA.y + avgPerpY * endpointPerpOffset - avgDirY * endpointParallelOffset;
+    const bBaseX = avgB.x + avgPerpX * endpointPerpOffset + avgDirX * endpointParallelOffset;
+    const bBaseY = avgB.y + avgPerpY * endpointPerpOffset + avgDirY * endpointParallelOffset;
+
+    const aYPositions = records.map((_, index) => aBaseY + (index - (records.length - 1) / 2) * lineSpacing);
+    const bYPositions = records.map((_, index) => bBaseY + (index - (records.length - 1) / 2) * lineSpacing);
+
+    const anchorA = orientation === 'vertical'
+      ? (avgPerpX >= 0 ? 'start' : 'end')
+      : (avgDirX >= 0 ? 'end' : 'start');
+    const anchorB = orientation === 'vertical'
+      ? (avgPerpX >= 0 ? 'start' : 'end')
+      : (avgDirX >= 0 ? 'start' : 'end');
+
+    return {
+      records,
+      avgA,
+      avgB,
+      avgMid,
+      lineSpacing,
+      center: {
+        anchor: centerAnchor,
+        x: centerBaseX,
+        positions: centerPositions,
+      },
+      endpointA: {
+        anchor: anchorA,
+        x: aBaseX,
+        positions: aYPositions,
+      },
+      endpointB: {
+        anchor: anchorB,
+        x: bBaseX,
+        positions: bYPositions,
+      },
+    };
+  }
+
+  function updateLinkGroupDisplay(key) {
+    const group = state.linkGroups.get(key);
+    if (!group) return;
+    const layout = buildLinkGroupLayout(group);
+    if (!layout) {
+      group.labelEl.style.display = 'none';
+      group.aTextEl.style.display = 'none';
+      group.bTextEl.style.display = 'none';
+      return;
+    }
+
+    const { records, avgA, avgB, avgMid, lineSpacing, center, endpointA, endpointB } = layout;
+
+    const aLines = records.map((record) => record.aText);
+    const bLines = records.map((record) => record.bText);
+    const centerLines = records.map((record) => record.labelText || '');
+
+    setMultilineText(
+      group.aTextEl,
+      aLines,
+      endpointA.x,
+      endpointA.positions[0] ?? avgA.y,
+      lineSpacing,
+      endpointA.anchor,
+      endpointA.positions
+    );
+    setMultilineText(
+      group.bTextEl,
+      bLines,
+      endpointB.x,
+      endpointB.positions[0] ?? avgB.y,
+      lineSpacing,
+      endpointB.anchor,
+      endpointB.positions
+    );
+    setMultilineText(
+      group.labelEl,
+      centerLines,
+      center.x,
+      center.positions[0] ?? avgMid.y,
+      lineSpacing,
+      center.anchor,
+      center.positions
+    );
+  }
+
   function drawRoundedRectPath(ctx, x, y, width, height, radius) {
     const r = Math.max(Math.min(radius, width / 2, height / 2), 2);
     ctx.beginPath();
@@ -360,6 +655,41 @@
         maxX = Math.max(maxX, cx + r);
         maxY = Math.max(maxY, cy + r);
       });
+    });
+    state.linkGroups.forEach((group) => {
+      const layout = buildLinkGroupLayout(group);
+      if (!layout) return;
+      const { records, avgA, avgB, avgMid, center, endpointA, endpointB } = layout;
+      const aLines = records.map((record) => record.aText);
+      const bLines = records.map((record) => record.bText);
+      const centerLines = records.map((record) => record.labelText || '');
+      const textWidth = 160;
+
+      const applyBounds = (lines, anchor, x, positions) => {
+        if (!lines.some((line) => line && line.trim() !== '')) return;
+        const top = Math.min(...positions);
+        const bottom = Math.max(...positions);
+        minY = Math.min(minY, top - 12);
+        maxY = Math.max(maxY, bottom + 12);
+        if (anchor === 'end') {
+          minX = Math.min(minX, x - textWidth);
+          maxX = Math.max(maxX, x + 8);
+        } else if (anchor === 'start') {
+          minX = Math.min(minX, x - 8);
+          maxX = Math.max(maxX, x + textWidth);
+        } else {
+          minX = Math.min(minX, x - textWidth / 2);
+          maxX = Math.max(maxX, x + textWidth / 2);
+        }
+      };
+
+      const aPositions = endpointA.positions.length ? endpointA.positions : [avgA.y];
+      const bPositions = endpointB.positions.length ? endpointB.positions : [avgB.y];
+      const labelPos = center.positions.length ? center.positions : [avgMid.y];
+
+      applyBounds(aLines, endpointA.anchor, endpointA.x, aPositions);
+      applyBounds(bLines, endpointB.anchor, endpointB.x, bPositions);
+      applyBounds(centerLines, center.anchor || 'middle', center.x, labelPos);
     });
     if (minX === Infinity) {
       minX = 0;
@@ -537,13 +867,17 @@
     if (!geom) return;
     const siblings = getParallelLinks(link);
     let { fromPoint, toPoint, midX, midY, perpX, perpY, dirX, dirY } = geom;
+    let relativeIndex = 0;
+    let siblingOffset = 0;
     if (siblings.length > 1) {
       const sorted = siblings.slice().sort((a, b) => a.id.localeCompare(b.id));
       const index = sorted.findIndex((candidate) => candidate.id === link.id);
-      const step = 24;
-      const offset = (index - (sorted.length - 1) / 2) * step;
-      const shiftX = perpX * offset;
-      const shiftY = perpY * offset;
+      const stepBase = 30;
+      const step = stepBase + Math.max(0, siblings.length - 2) * 10;
+      relativeIndex = index - (sorted.length - 1) / 2;
+      siblingOffset = relativeIndex * step;
+      const shiftX = perpX * siblingOffset;
+      const shiftY = perpY * siblingOffset;
       const targetForFrom = {
         x: geom.toMetrics.centerX + shiftX,
         y: geom.toMetrics.centerY + shiftY,
@@ -569,26 +903,10 @@
     link.line.setAttribute('x2', String(toPoint.x));
     link.line.setAttribute('y2', String(toPoint.y));
 
-    link.labelText.textContent = link.label || '';
-    link.labelText.setAttribute('x', String(midX));
-    link.labelText.setAttribute('y', String(midY - 6));
-    link.labelText.style.display = link.label ? 'block' : 'none';
-
-    link.aText.textContent = link.aDetails || '';
-    link.bText.textContent = link.bDetails || '';
-    link.aText.style.display = link.aDetails ? 'block' : 'none';
-    link.bText.style.display = link.bDetails ? 'block' : 'none';
-    link.notesText.textContent = link.notes || '';
-    link.notesText.setAttribute('x', String(midX));
-    link.notesText.setAttribute('y', String(midY + 12));
-    link.notesText.style.display = link.notes ? 'block' : 'none';
-
-    const endpointOffset = 20;
-    const alongOffset = 16;
-    link.aText.setAttribute('x', String(fromPoint.x + perpX * endpointOffset + dirX * alongOffset));
-    link.aText.setAttribute('y', String(fromPoint.y + perpY * endpointOffset + dirY * alongOffset));
-    link.bText.setAttribute('x', String(toPoint.x - perpX * endpointOffset - dirX * alongOffset));
-    link.bText.setAttribute('y', String(toPoint.y - perpY * endpointOffset - dirY * alongOffset));
+    link.labelText.style.display = 'none';
+    link.aText.style.display = 'none';
+    link.bText.style.display = 'none';
+    link.notesText.style.display = 'none';
     link._geom = {
       fromPoint,
       toPoint,
@@ -601,6 +919,10 @@
       fromMetrics: geom.fromMetrics,
       toMetrics: geom.toMetrics,
     };
+    ensureLinkGroup(link);
+    const key = linkGroupKey(link);
+    updateLinkGroupDisplay(key);
+    updateArtboardExtents();
     updateBondsForLink(link.id);
   }
 
@@ -890,7 +1212,9 @@
       ...visuals,
     };
     state.links.set(id, link);
+    ensureLinkGroup(link);
     updateLinkGraphics(link);
+    updateLinkGroupDisplay(linkGroupKey(link));
     return link;
   }
 
@@ -900,6 +1224,7 @@
     link.group.remove();
     state.links.delete(id);
     state.bondSelection.delete(id);
+    removeLinkFromGroup(link);
     const affectedBonds = [];
     state.bonds.forEach((bond) => {
       if (bond.links.includes(id)) affectedBonds.push(bond);
@@ -1181,6 +1506,12 @@
     }
     Array.from(state.links.keys()).forEach((id) => removeLink(id));
     Array.from(state.bonds.keys()).forEach((id) => removeBond(id));
+    state.linkGroups.forEach((group) => {
+      group.labelEl.remove();
+      group.aTextEl.remove();
+      group.bTextEl.remove();
+    });
+    state.linkGroups.clear();
     state.nodes.forEach((node) => node.el.remove());
     state.nodes.clear();
     state.bonds.clear();
@@ -1301,48 +1632,44 @@
     state.links.forEach((link) => {
       const geom = link._geom || computeLinkGeometry(link);
       if (!geom) return;
-      const { fromPoint, toPoint, midX, midY, perpX, perpY, dirX, dirY } = geom;
-
       ctx.strokeStyle = linkStroke;
       ctx.lineWidth = 3;
       ctx.lineCap = 'round';
       ctx.beginPath();
-      ctx.moveTo(fromPoint.x, fromPoint.y);
-      ctx.lineTo(toPoint.x, toPoint.y);
+      ctx.moveTo(geom.fromPoint.x, geom.fromPoint.y);
+      ctx.lineTo(geom.toPoint.x, geom.toPoint.y);
       ctx.stroke();
+    });
 
-      ctx.fillStyle = labelColor;
-      ctx.font = '600 13px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'bottom';
-      if (link.label) {
-        ctx.fillText(link.label, midX, midY - 8);
-      }
-      ctx.font = '500 11px sans-serif';
-      ctx.textBaseline = 'top';
-      if (link.notes) {
-        ctx.fillStyle = noteColor;
-        ctx.fillText(link.notes, midX, midY + 10);
-        ctx.fillStyle = labelColor;
-      }
+    ctx.fillStyle = labelColor;
+    state.linkGroups.forEach((group) => {
+      const layout = buildLinkGroupLayout(group);
+      if (!layout) return;
+      const { records, avgA, avgB, avgMid, center, endpointA, endpointB } = layout;
+      const aLines = records.map((record) => record.aText);
+      const bLines = records.map((record) => record.bText);
+      const centerLines = records.map((record) => record.labelText || '');
 
-      const endpointOffset = 20;
-      const alongOffset = 16;
-      const ax = fromPoint.x + perpX * endpointOffset + dirX * alongOffset;
-      const ay = fromPoint.y + perpY * endpointOffset + dirY * alongOffset;
-      const bx = toPoint.x - perpX * endpointOffset - dirX * alongOffset;
-      const by = toPoint.y - perpY * endpointOffset - dirY * alongOffset;
-
-      if (link.aDetails) {
-        ctx.textAlign = 'left';
+      const renderLines = (lines, baseX, positions, anchor, font, color) => {
+        const hasContent = lines.some((line) => line && line.trim() !== '');
+        if (!hasContent) return;
+        ctx.fillStyle = color;
+        ctx.font = font;
         ctx.textBaseline = 'middle';
-        ctx.fillText(link.aDetails, ax, ay);
-      }
-      if (link.bDetails) {
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(link.bDetails, bx, by);
-      }
+        ctx.textAlign = anchor === 'end' ? 'right' : anchor === 'start' ? 'left' : 'center';
+        lines.forEach((line, index) => {
+          const y = positions[index] ?? positions[0];
+          ctx.fillText(line || '', baseX, y);
+        });
+      };
+
+      const aPositions = endpointA.positions.length ? endpointA.positions : [avgA.y];
+      const bPositions = endpointB.positions.length ? endpointB.positions : [avgB.y];
+      const centerPositions = center.positions.length ? center.positions : [avgMid.y];
+
+      renderLines(aLines, endpointA.x, aPositions, endpointA.anchor, '500 11px sans-serif', '#f9fafb');
+      renderLines(bLines, endpointB.x, bPositions, endpointB.anchor, '500 11px sans-serif', '#f9fafb');
+      renderLines(centerLines, center.x, centerPositions, center.anchor || 'middle', '600 12px sans-serif', labelColor);
     });
 
     const bondStroke = 'rgba(56,189,248,0.85)';
