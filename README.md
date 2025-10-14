@@ -8,6 +8,7 @@ Collaborative Node.js workspace with a realtime shared pad, lightweight tools hu
 
 - Shared pads per room key, saved under `data/pads/<room>.json`
 - Instant multi-user editing over Socket.IO with optional file uploads per room
+- **Topology sandbox** with drag/drop nodes, redundant link bonding, snap-to-grid, and JSON/JPG export
 - PDF to JPG conversion (single JPG or ZIP of JPGs) powered by `pdftoppm`
 - Docker support (Compose and plain Docker) with persistent storage volume
 - Basic health check at `GET /health`
@@ -117,7 +118,24 @@ Add the resulting value to your shell exports, `.env`, secrets manager, or Compo
 | `POST` | `/pad/:room/files` | Upload file to pad |
 | `GET` | `/tools/pdf-to-jpg` | PDF → JPG form |
 | `POST` | `/tools/pdf-to-jpg` | Handle PDF conversion |
+| `GET` | `/tools/topology-sandbox` | Network topology sandbox |
 | `GET` | `/health` | JSON health check |
+
+## Topology sandbox
+
+The sandbox is aimed at quick network planning sketches:
+
+- Drag nodes (router, switch, firewall, server, cloud, workstation) from the palette or click to drop them in the canvas.
+- Connect nodes in **Link mode**; parallel links automatically fan out so each interface is visible.
+- Group redundant circuits with **Bond mode**. Bonds draw per-device rings around the participating links. Add as many member links as you need.
+- Use the toolbar to toggle **Snap Grid** (20 px) and **Center View**, or clear/export/import.
+- The canvas auto-expands with scrollbars so zooming the browser never hides equipment off-screen.
+- Export options:
+  - **JSON** – retains node/link/bond metadata for re-importing later.
+  - **JPG** – crops to the minimal bounding rectangle covering every node/link/bond, so off-screen items are preserved in the snapshot.
+- Bonds default to blank labels to keep diagrams tidy; add a label only when you need one in the inspector.
+
+> Tip: After importing or building a large design, press **Center View** to reframe the canvas. Use Snap Grid for neat alignment, or leave it off for free-form placement.
 
 ## PDF → JPG conversion
 
