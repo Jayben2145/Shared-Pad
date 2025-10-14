@@ -85,13 +85,18 @@ const pads = Object.create(null);
 const saveTimers = Object.create(null);
 function loadPad(room) {
   if (pads[room]) return pads[room];
-  try {
-    const f = padFile(room);
-    if (fs.existsSync(f)) {
+  const f = padFile(room);
+  if (fs.existsSync(f)) {
+    try {
       const { text = '', version = 0 } = JSON.parse(fs.readFileSync(f, 'utf8'));
       pads[room] = { text, version };
-    } else pads[room] = { text, version: 0 };
-  } catch { pads[room] = { text, version: 0 }; }
+    } catch (err) {
+      console.warn(`[${room}] pad data invalid or unreadable; resetting`, err);
+      pads[room] = { text: '', version: 0 };
+    }
+  } else {
+    pads[room] = { text: '', version: 0 };
+  }
   return pads[room];
 }
 function scheduleSave(room) {
