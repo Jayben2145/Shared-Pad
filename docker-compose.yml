@@ -12,7 +12,7 @@ services:
       - SHARED_PASSWORD=${SHARED_PASSWORD}
       - SESSION_KEY=${SESSION_KEY}
     ports:
-      - "3000:3000"
+      - "9550:3000"
     volumes:
       - sharedpad-data:/usr/src/app/data
     restart: unless-stopped
