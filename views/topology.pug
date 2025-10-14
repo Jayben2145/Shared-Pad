@@ -33,6 +33,8 @@ block content
             button#clear-canvas(type="button") Clear Canvas
             button#export-topology(type="button") Export JSON
             button#export-topology-jpg(type="button") Export JPG
+            button#toggle-snap(type="button") Snap Grid: Off
+            button#fit-view(type="button") Center View
             label.file-import
               input#import-topology(type="file" accept="application/json")
               span Import JSON
@@ -74,7 +76,7 @@ block content
           input(type="hidden" name="bond-id")
           label(for="bond-label") Bond label
           input#bond-label(type="text" name="label" placeholder="Port-Channel 10")
-          p.text-muted(style="font-size:12px") Linked circuits
+          p#bond-count.text-muted(style="font-size:12px") Linked circuits
           ul#bond-links
           button#delete-bond(type="button" class="danger") Delete Bond
 

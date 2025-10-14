@@ -13,7 +13,16 @@
   const clearBtn = document.getElementById('clear-canvas');
   const exportBtn = document.getElementById('export-topology');
   const exportJpgBtn = document.getElementById('export-topology-jpg');
+  const toggleSnapBtn = document.getElementById('toggle-snap');
+  const fitViewBtn = document.getElementById('fit-view');
   const importInput = document.getElementById('import-topology');
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  const GRID_SIZE = 20;
+  const MIN_ARTBOARD_WIDTH = 2400;
+  const MIN_ARTBOARD_HEIGHT = 1600;
+  const ARTBOARD_MARGIN = 240;
+
   let bondsSvgLayer = document.getElementById('bond-layer');
   if (!bondsSvgLayer) {
     bondsSvgLayer = document.createElementNS(SVG_NS, 'g');
@@ -42,9 +51,9 @@
   const bondFormId = bondForm?.querySelector('input[name="bond-id"]');
   const bondLabelInput = document.getElementById('bond-label');
   const bondLinksList = document.getElementById('bond-links');
+  const bondCountLabel = document.getElementById('bond-count');
   const deleteBondBtn = document.getElementById('delete-bond');
 
-  const SVG_NS = 'http://www.w3.org/2000/svg';
   const typeIcons = {
     router: 'R',
     switch: 'S',
@@ -75,8 +84,22 @@
     linkMode: false,
     linkStart: null,
     bondMode: false,
-    bondPending: null,
+    bondSelection: new Set(),
+    activeBondId: null,
+    snapToGrid: false,
+    artboardWidth: MIN_ARTBOARD_WIDTH,
+    artboardHeight: MIN_ARTBOARD_HEIGHT,
   };
+
+  function applyArtboardSize() {
+    linkLayer.setAttribute('width', state.artboardWidth);
+    linkLayer.setAttribute('height', state.artboardHeight);
+    linkLayer.setAttribute('viewBox', `0 0 ${state.artboardWidth} ${state.artboardHeight}`);
+    linkLayer.style.width = `${state.artboardWidth}px`;
+    linkLayer.style.height = `${state.artboardHeight}px`;
+    canvas.style.width = `${state.artboardWidth}px`;
+    canvas.style.height = `${state.artboardHeight}px`;
+  }
 
   function capitalize(str) {
     return (str || '').charAt(0).toUpperCase() + (str || '').slice(1);
@@ -156,41 +179,70 @@
   }
 
   function computeBondGeometry(bond) {
-    if (!bond || bond.links.length < 2) return null;
-    const linkA = state.links.get(bond.links[0]);
-    const linkB = state.links.get(bond.links[1]);
-    if (!linkA || !linkB) return null;
-    const sharedNode = bond.sharedNode || findSharedNode(linkA, linkB);
-    if (!sharedNode) return null;
-    const geomA = linkA._geom || computeLinkGeometry(linkA);
-    const geomB = linkB._geom || computeLinkGeometry(linkB);
-    if (!geomA || !geomB) return null;
-    const pointA = (linkA.from === sharedNode) ? geomA.fromPoint : geomA.toPoint;
-    const pointB = (linkB.from === sharedNode) ? geomB.fromPoint : geomB.toPoint;
-    const shared = state.nodes.get(sharedNode);
-    if (!shared) return null;
-    const metrics = getNodeMetrics(shared);
-    const center = { x: metrics.centerX, y: metrics.centerY };
-    const mid = { x: (pointA.x + pointB.x) / 2, y: (pointA.y + pointB.y) / 2 };
-    let dirX = mid.x - center.x;
-    let dirY = mid.y - center.y;
-    let length = Math.hypot(dirX, dirY);
-    if (!length) {
-      dirX = 0;
-      dirY = -1;
-      length = 1;
+    if (!bond || !Array.isArray(bond.links) || bond.links.length < 2) return null;
+    const nodeEntries = new Map();
+    for (const linkId of bond.links) {
+      const link = state.links.get(linkId);
+      if (!link) continue;
+      const geom = link._geom || computeLinkGeometry(link);
+      if (!geom) continue;
+      const nodes = [
+        { nodeId: link.from, metrics: geom.fromMetrics, anchor: geom.fromPoint },
+        { nodeId: link.to, metrics: geom.toMetrics, anchor: geom.toPoint },
+      ];
+      nodes.forEach(({ nodeId, metrics, anchor }) => {
+        if (!nodeId || !metrics || !anchor) return;
+        let entry = nodeEntries.get(nodeId);
+        if (!entry) {
+          entry = { nodeId, metrics, anchors: [] };
+          nodeEntries.set(nodeId, entry);
+        }
+        entry.anchors.push(anchor);
+      });
     }
-    const offset = 36;
-    const control = { x: mid.x + (dirX / length) * offset, y: mid.y + (dirY / length) * offset };
-    const labelOffset = 18;
-    const labelPoint = { x: control.x, y: control.y - labelOffset };
-    return {
-      pointA,
-      pointB,
-      control,
-      labelPoint,
-      sharedNode,
-    };
+    const sharedSet = new Set(bond.sharedNodes || []);
+    const markers = [];
+    nodeEntries.forEach((entry) => {
+      const count = entry.anchors.length;
+      const include = sharedSet.size > 0 ? sharedSet.has(entry.nodeId) : count >= 2;
+      if (!include) return;
+      let sumX = 0;
+      let sumY = 0;
+      entry.anchors.forEach((anchor) => {
+        const dx = anchor.x - entry.metrics.centerX;
+        const dy = anchor.y - entry.metrics.centerY;
+        const len = Math.hypot(dx, dy) || 1;
+        const ext = 18;
+        sumX += anchor.x + (dx / len) * ext;
+        sumY += anchor.y + (dy / len) * ext;
+      });
+      const avgX = sumX / entry.anchors.length;
+      const avgY = sumY / entry.anchors.length;
+      const radius = 14 + Math.min(entry.anchors.length - 1, 3) * 2;
+      markers.push({
+        nodeId: entry.nodeId,
+        center: { x: avgX, y: avgY },
+        radius,
+        count,
+      });
+    });
+    if (!markers.length) return null;
+    let labelPoint;
+    if (markers.length === 1) {
+      const marker = markers[0];
+      labelPoint = {
+        x: marker.center.x,
+        y: marker.center.y - (marker.radius + 14),
+      };
+    } else {
+      const avgX = markers.reduce((sum, marker) => sum + marker.center.x, 0) / markers.length;
+      let labelY = Math.min(...markers.map((marker) => marker.center.y - marker.radius)) - 14;
+      if (labelY < 24) {
+        labelY = Math.max(...markers.map((marker) => marker.center.y + marker.radius)) + 16;
+      }
+      labelPoint = { x: avgX, y: labelY };
+    }
+    return { markers, labelPoint };
   }
 
   function getParallelLinks(link) {
@@ -228,11 +280,22 @@
       .slice(0, 4);
   }
 
-  function findSharedNode(linkA, linkB) {
-    if (!linkA || !linkB) return null;
-    const nodesA = [linkA.from, linkA.to];
-    const nodesB = [linkB.from, linkB.to];
-    return nodesA.find((nodeId) => nodesB.includes(nodeId)) || null;
+  function getSharedNodes(linkIds) {
+    const unique = Array.from(new Set(linkIds));
+    if (unique.length === 0) return new Set();
+    let shared = null;
+    for (const linkId of unique) {
+      const link = state.links.get(linkId);
+      if (!link) return new Set();
+      const nodes = new Set([link.from, link.to].filter(Boolean));
+      if (!shared) {
+        shared = nodes;
+      } else {
+        shared = new Set([...shared].filter((nodeId) => nodes.has(nodeId)));
+      }
+      if (!shared.size) return shared;
+    }
+    return shared || new Set();
   }
 
   function ensureCountersFromId(id, type) {
@@ -251,17 +314,94 @@
 
   function refreshSvgSize() {
     const rect = stage.getBoundingClientRect();
-    const width = rect.width || stage.clientWidth || 1;
-    const height = rect.height || stage.clientHeight || 1;
-    linkLayer.setAttribute('width', width);
-    linkLayer.setAttribute('height', height);
-    linkLayer.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    applyArtboardSize();
   }
 
   function refreshAllPositions() {
-    refreshSvgSize();
+    applyArtboardSize();
     state.links.forEach((link) => updateLinkGraphics(link));
     state.bonds.forEach((bond) => updateBondGraphics(bond));
+  }
+
+  function computeContentBounds() {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    state.nodes.forEach((node) => {
+      const width = node.el.offsetWidth || 0;
+      const height = node.el.offsetHeight || 0;
+      minX = Math.min(minX, node.x);
+      minY = Math.min(minY, node.y);
+      maxX = Math.max(maxX, node.x + width);
+      maxY = Math.max(maxY, node.y + height);
+    });
+    state.links.forEach((link) => {
+      const geom = link._geom || computeLinkGeometry(link);
+      if (!geom) return;
+      const points = [geom.fromPoint, geom.toPoint];
+      points.forEach((pt) => {
+        if (!pt) return;
+        minX = Math.min(minX, pt.x);
+        minY = Math.min(minY, pt.y);
+        maxX = Math.max(maxX, pt.x);
+        maxY = Math.max(maxY, pt.y);
+      });
+    });
+    state.bonds.forEach((bond) => {
+      const geom = computeBondGeometry(bond);
+      if (!geom) return;
+      geom.markers.forEach((marker) => {
+        const r = marker.radius;
+        const cx = marker.center.x;
+        const cy = marker.center.y;
+        minX = Math.min(minX, cx - r);
+        minY = Math.min(minY, cy - r);
+        maxX = Math.max(maxX, cx + r);
+        maxY = Math.max(maxY, cy + r);
+      });
+    });
+    if (minX === Infinity) {
+      minX = 0;
+      minY = 0;
+      maxX = MIN_ARTBOARD_WIDTH - ARTBOARD_MARGIN;
+      maxY = MIN_ARTBOARD_HEIGHT - ARTBOARD_MARGIN;
+    }
+    return { minX, minY, maxX, maxY };
+  }
+
+  function updateArtboardExtents() {
+    const bounds = computeContentBounds();
+    const neededWidth = Math.max(MIN_ARTBOARD_WIDTH, bounds.maxX + ARTBOARD_MARGIN);
+    const neededHeight = Math.max(MIN_ARTBOARD_HEIGHT, bounds.maxY + ARTBOARD_MARGIN);
+    let changed = false;
+    if (neededWidth !== state.artboardWidth) {
+      state.artboardWidth = neededWidth;
+      changed = true;
+    }
+    if (neededHeight !== state.artboardHeight) {
+      state.artboardHeight = neededHeight;
+      changed = true;
+    }
+    if (changed) applyArtboardSize();
+  }
+
+  function centerViewOnContent(behavior = 'smooth') {
+    const bounds = computeContentBounds();
+    const contentWidth = bounds.maxX - bounds.minX;
+    const contentHeight = bounds.maxY - bounds.minY;
+    const targetCenterX = bounds.minX + contentWidth / 2;
+    const targetCenterY = bounds.minY + contentHeight / 2;
+    const maxScrollLeft = Math.max(state.artboardWidth - stage.clientWidth, 0);
+    const maxScrollTop = Math.max(state.artboardHeight - stage.clientHeight, 0);
+    const scrollLeft = clamp(targetCenterX - stage.clientWidth / 2, 0, maxScrollLeft);
+    const scrollTop = clamp(targetCenterY - stage.clientHeight / 2, 0, maxScrollTop);
+    if (typeof stage.scrollTo === 'function') {
+      stage.scrollTo({ left: scrollLeft, top: scrollTop, behavior });
+    } else {
+      stage.scrollLeft = scrollLeft;
+      stage.scrollTop = scrollTop;
+    }
   }
 
   let pendingFullRefresh = false;
@@ -288,7 +428,7 @@
     });
     state.links.forEach((link) => {
       const isSelected = state.selected && state.selected.type === 'link' && state.selected.id === link.id;
-      const isPending = state.bondMode && state.bondPending === link.id;
+      const isPending = state.bondMode && state.bondSelection.has(link.id);
       link.group.classList.toggle('selected', !!isSelected);
       link.group.classList.toggle('pending', !!isPending);
     });
@@ -298,14 +438,19 @@
     });
     if (cancelLinkBtn) cancelLinkBtn.disabled = !state.linkMode || !state.linkStart;
     if (linkModeBtn) linkModeBtn.classList.toggle('active', !!state.linkMode);
-    if (cancelBondBtn) cancelBondBtn.disabled = !state.bondMode || !state.bondPending;
+    if (cancelBondBtn) cancelBondBtn.disabled = !state.bondMode || state.bondSelection.size === 0;
     if (bondModeBtn) bondModeBtn.classList.toggle('active', !!state.bondMode);
+    if (toggleSnapBtn) {
+      toggleSnapBtn.classList.toggle('active', state.snapToGrid);
+      toggleSnapBtn.textContent = state.snapToGrid ? 'Snap Grid: On' : 'Snap Grid: Off';
+    }
   }
 
   function clearInspector() {
     if (nodeForm) nodeForm.classList.add('hidden');
     if (linkForm) linkForm.classList.add('hidden');
     if (bondForm) bondForm.classList.add('hidden');
+    if (bondCountLabel) bondCountLabel.textContent = 'Linked circuits';
   }
 
   function selectNone() {
@@ -357,6 +502,9 @@
         li.textContent = `${fromLabel} ↔ ${toLabel}${label}`;
         bondLinksList.appendChild(li);
       });
+    }
+    if (bondCountLabel) {
+      bondCountLabel.textContent = `Linked circuits (${bond.links.length})`;
     }
   }
 
@@ -479,25 +627,29 @@
   }
 
   function createBondElement(id) {
-    const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    const group = document.createElementNS(SVG_NS, 'g');
     group.classList.add('bond-group');
     group.dataset.bondId = id;
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.classList.add('bond-path');
-    const labelText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    const labelText = document.createElementNS(SVG_NS, 'text');
     labelText.classList.add('bond-label');
-    group.appendChild(path);
+    labelText.setAttribute('text-anchor', 'middle');
+    labelText.setAttribute('dominant-baseline', 'middle');
     group.appendChild(labelText);
     group.addEventListener('click', (e) => {
       e.stopPropagation();
       if (state.bondMode) {
-        handleBondLinkClick(null);
-        setBondMode(false);
+        state.bondSelection.clear();
+        const target = state.bonds.get(id);
+        if (target) {
+          state.activeBondId = id;
+          target.links.forEach((linkId) => state.bondSelection.add(linkId));
+          highlightSelection();
+        }
       }
       selectBond(id);
     });
     bondsSvgLayer.appendChild(group);
-    return { group, path, labelText };
+    return { group, labelText, markerElements: new Map() };
   }
 
   function updateBondGraphics(bond) {
@@ -505,50 +657,65 @@
     const geom = computeBondGeometry(bond);
     if (!geom) {
       bond.group.style.display = 'none';
+      if (bond.markerElements) {
+        bond.markerElements.forEach((entry) => entry.circle?.remove());
+        bond.markerElements.clear();
+      }
       return;
     }
     bond.group.style.display = 'block';
-    const { pointA, pointB, control, labelPoint, sharedNode } = geom;
-    bond.sharedNode = sharedNode;
-    const d = `M ${pointA.x} ${pointA.y} Q ${control.x} ${control.y} ${pointB.x} ${pointB.y}`;
-    bond.path.setAttribute('d', d);
-    const text = bond.label || 'Bond';
-    bond.labelText.textContent = text;
-    bond.labelText.setAttribute('x', String(labelPoint.x));
-    bond.labelText.setAttribute('y', String(labelPoint.y));
+    if (!bond.markerElements) bond.markerElements = new Map();
+    const used = new Set();
+    geom.markers.forEach((marker) => {
+      let entry = bond.markerElements.get(marker.nodeId);
+      if (!entry) {
+        const circle = document.createElementNS(SVG_NS, 'circle');
+        circle.classList.add('bond-circle');
+        bond.group.insertBefore(circle, bond.labelText);
+        entry = { circle };
+        bond.markerElements.set(marker.nodeId, entry);
+      }
+      entry.circle.setAttribute('cx', String(marker.center.x));
+      entry.circle.setAttribute('cy', String(marker.center.y));
+      entry.circle.setAttribute('r', String(marker.radius));
+      used.add(marker.nodeId);
+    });
+    bond.markerElements.forEach((entry, nodeId) => {
+      if (!used.has(nodeId)) {
+        entry.circle.remove();
+        bond.markerElements.delete(nodeId);
+      }
+    });
+    const labelText = String(bond.label || '').trim();
+    bond.labelText.textContent = labelText;
+    bond.labelText.setAttribute('x', String(geom.labelPoint.x));
+    bond.labelText.setAttribute('y', String(geom.labelPoint.y));
+    bond.labelText.style.display = labelText ? 'block' : 'none';
   }
 
-  function createBond(linkAId, linkBId, options = {}) {
-    if (!linkAId || !linkBId || linkAId === linkBId) return null;
-    const linkA = state.links.get(linkAId);
-    const linkB = state.links.get(linkBId);
-    if (!linkA || !linkB) return null;
-    const sharedNode = options.sharedNode || findSharedNode(linkA, linkB);
-    if (!sharedNode) {
+  function createBond(linkIds, options = {}) {
+    const unique = Array.from(new Set(Array.isArray(linkIds) ? linkIds : [linkIds])).filter(Boolean);
+    if (unique.length < 2) return null;
+    const sharedNodes = options.sharedNodes ? new Set(options.sharedNodes) : getSharedNodes(unique);
+    if (!sharedNodes.size) {
       window.alert('These links do not share a common node and cannot be bonded.');
       return null;
     }
-    const existing = Array.from(state.bonds.values()).find((bond) => {
-      if (bond.links.length !== 2) return false;
-      const current = [...bond.links].sort().join('|');
-      const candidate = [linkAId, linkBId].sort().join('|');
-      return current === candidate;
-    });
-    if (existing) {
-      window.alert('These links are already bonded.');
-      return existing;
-    }
+    const sortedLinks = unique.slice().sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    const key = sortedLinks.join('|');
+    const existing = Array.from(state.bonds.values()).find((bond) => bond.links.slice().sort().join('|') === key);
+    if (existing) return existing;
     let id = options.id || `b${state.bondCounter++}`;
     ensureCountersFromId(id, 'bond');
     if (state.bonds.has(id)) {
       id = `b${state.bondCounter++}`;
     }
     const visuals = createBondElement(id);
-    const label = typeof options.label === 'string' ? options.label : `Bond ${state.bonds.size + 1}`;
+    const label = typeof options.label === 'string' ? options.label : '';
     const bond = {
       id,
-      links: [linkAId, linkBId],
-      sharedNode,
+      links: sortedLinks,
+      sharedNodes: Array.from(sharedNodes),
       label,
       ...visuals,
     };
@@ -560,6 +727,14 @@
   function removeBond(id) {
     const bond = state.bonds.get(id);
     if (!bond) return;
+    if (bond.markerElements) {
+      bond.markerElements.forEach((entry) => {
+        entry.circle?.remove();
+      });
+      bond.markerElements.clear();
+    }
+    bond.links?.forEach((linkId) => state.bondSelection.delete(linkId));
+    if (state.activeBondId === id) state.activeBondId = null;
     if (bond.group) bond.group.remove();
     state.bonds.delete(id);
     if (state.selected && state.selected.type === 'bond' && state.selected.id === id) {
@@ -567,6 +742,7 @@
     } else {
       highlightSelection();
     }
+    updateArtboardExtents();
   }
 
   function updateNodeAppearance(node) {
@@ -581,23 +757,38 @@
       node.metaEl.textContent = '';
       node.metaEl.classList.add('hidden');
     }
+    updateArtboardExtents();
   }
 
-  function setNodePosition(node, x, y, rectOverride) {
-    const rect = rectOverride || stage.getBoundingClientRect();
+  function setNodePosition(node, x, y) {
     const nodeWidth = node.el.offsetWidth || 0;
     const nodeHeight = node.el.offsetHeight || 0;
-    const minX = 8;
-    const minY = 8;
-    const availableWidth = (rect.width || stage.clientWidth) - nodeWidth - 8;
-    const availableHeight = (rect.height || stage.clientHeight) - nodeHeight - 8;
-    const maxX = Math.max(availableWidth, minX);
-    const maxY = Math.max(availableHeight, minY);
-    node.x = clamp(x, minX, maxX);
-    node.y = clamp(y, minY, maxY);
+    let targetX = x;
+    let targetY = y;
+    if (state.snapToGrid) {
+      targetX = Math.round(targetX / GRID_SIZE) * GRID_SIZE;
+      targetY = Math.round(targetY / GRID_SIZE) * GRID_SIZE;
+    }
+    const neededWidth = targetX + nodeWidth + ARTBOARD_MARGIN;
+    const neededHeight = targetY + nodeHeight + ARTBOARD_MARGIN;
+    let changed = false;
+    if (neededWidth > state.artboardWidth) {
+      state.artboardWidth = Math.max(neededWidth, MIN_ARTBOARD_WIDTH);
+      changed = true;
+    }
+    if (neededHeight > state.artboardHeight) {
+      state.artboardHeight = Math.max(neededHeight, MIN_ARTBOARD_HEIGHT);
+      changed = true;
+    }
+    if (changed) applyArtboardSize();
+    targetX = clamp(targetX, 8, state.artboardWidth - nodeWidth - 8);
+    targetY = clamp(targetY, 8, state.artboardHeight - nodeHeight - 8);
+    node.x = clamp(targetX, 8, state.artboardWidth - nodeWidth - 8);
+    node.y = clamp(targetY, 8, state.artboardHeight - nodeHeight - 8);
     node.el.style.transform = `translate(${node.x}px, ${node.y}px)`;
     updateLinksForNode(node.id);
     updateBondsForNode(node.id);
+    updateArtboardExtents();
   }
 
   function startNodeDrag(id, event) {
@@ -605,10 +796,12 @@
     if (!node) return;
     selectNode(id);
     const rect = stage.getBoundingClientRect();
+    const scrollLeft = stage.scrollLeft;
+    const scrollTop = stage.scrollTop;
     node.dragStageRect = rect;
     node.dragOffset = {
-      x: event.clientX - rect.left - node.x,
-      y: event.clientY - rect.top - node.y,
+      x: event.clientX - rect.left + scrollLeft - node.x,
+      y: event.clientY - rect.top + scrollTop - node.y,
     };
     node.el.classList.add('dragging');
   }
@@ -617,9 +810,11 @@
     const node = state.nodes.get(id);
     if (!node || !node.dragOffset) return;
     const rect = node.dragStageRect || stage.getBoundingClientRect();
-    const x = event.clientX - rect.left - node.dragOffset.x;
-    const y = event.clientY - rect.top - node.dragOffset.y;
-    setNodePosition(node, x, y, rect);
+    const scrollLeft = stage.scrollLeft;
+    const scrollTop = stage.scrollTop;
+    const x = event.clientX - rect.left + scrollLeft - node.dragOffset.x;
+    const y = event.clientY - rect.top + scrollTop - node.dragOffset.y;
+    setNodePosition(node, x, y);
   }
 
   function finishNodeDrag(id) {
@@ -704,16 +899,26 @@
     if (!link) return;
     link.group.remove();
     state.links.delete(id);
-    const bondsToRemove = [];
+    state.bondSelection.delete(id);
+    const affectedBonds = [];
     state.bonds.forEach((bond) => {
-      if (bond.links.includes(id)) bondsToRemove.push(bond.id);
+      if (bond.links.includes(id)) affectedBonds.push(bond);
     });
-    bondsToRemove.forEach((bondId) => removeBond(bondId));
+    affectedBonds.forEach((bond) => {
+      bond.links = bond.links.filter((linkId) => linkId !== id);
+      if (bond.links.length < 2) {
+        removeBond(bond.id);
+      } else {
+        bond.sharedNodes = Array.from(getSharedNodes(bond.links));
+        updateBondGraphics(bond);
+      }
+    });
     if (state.selected && state.selected.type === 'link' && state.selected.id === id) {
       selectNone();
     } else {
       highlightSelection();
     }
+    updateArtboardExtents();
   }
 
   function removeNode(id) {
@@ -732,6 +937,7 @@
       highlightSelection();
     }
     updateEmptyState();
+    updateArtboardExtents();
   }
 
   function spawnNode(type, opts = {}) {
@@ -781,9 +987,12 @@
     nodeEl.appendChild(metaEl);
     canvas.appendChild(nodeEl);
 
-    const rect = stage.getBoundingClientRect();
-    const fallbackX = (rect.width || stage.clientWidth) / 2 - (nodeEl.offsetWidth || 160) / 2;
-    const fallbackY = (rect.height || stage.clientHeight) / 2 - (nodeEl.offsetHeight || 80) / 2;
+    const viewportWidth = stage.clientWidth;
+    const viewportHeight = stage.clientHeight;
+    const viewportCenterX = stage.scrollLeft + viewportWidth / 2;
+    const viewportCenterY = stage.scrollTop + viewportHeight / 2;
+    const fallbackX = viewportCenterX - (nodeEl.offsetWidth || 160) / 2;
+    const fallbackY = viewportCenterY - (nodeEl.offsetHeight || 80) / 2;
     const node = {
       id,
       type: nodeType,
@@ -798,7 +1007,7 @@
       dragOffset: null,
     };
 
-    setNodePosition(node, node.x, node.y, rect);
+    setNodePosition(node, node.x, node.y);
     state.nodes.set(id, node);
     updateNodeAppearance(node);
     updateEmptyState();
@@ -876,41 +1085,94 @@
       return;
     }
     if (!linkId) {
-      state.bondPending = null;
+      state.bondSelection.clear();
+      state.activeBondId = null;
       highlightSelection();
       return;
     }
-    if (!state.bondPending) {
-      state.bondPending = linkId;
+    if (state.bondSelection.has(linkId)) {
+      state.bondSelection.delete(linkId);
+      if (state.activeBondId) {
+        const bond = state.bonds.get(state.activeBondId);
+        if (bond) {
+          bond.links = bond.links.filter((id) => id !== linkId);
+          if (bond.links.length < 2) {
+            removeBond(bond.id);
+          } else {
+            bond.sharedNodes = Array.from(getSharedNodes(bond.links));
+            updateBondGraphics(bond);
+            selectBond(bond.id);
+          }
+        }
+      }
       highlightSelection();
       return;
     }
-    if (state.bondPending === linkId) {
-      state.bondPending = null;
-      highlightSelection();
-      return;
+    state.bondSelection.add(linkId);
+    const result = applyBondSelection();
+    if (!result.success) {
+      state.bondSelection.delete(linkId);
+      window.alert('Selected links do not share a common node for bonding.');
+    } else if (result.bond) {
+      selectBond(result.bond.id);
     }
-    const first = state.bondPending;
-    state.bondPending = null;
-    const bond = createBond(first, linkId);
-    if (bond) {
-      selectBond(bond.id);
-    } else {
-      highlightSelection();
-    }
+    highlightSelection();
   }
 
   function setBondMode(active) {
     state.bondMode = !!active;
-    if (!state.bondMode) {
-      state.bondPending = null;
-    }
-    if (state.bondMode && state.linkMode) {
-      setLinkMode(false);
+    if (state.bondMode) {
+      if (state.linkMode) setLinkMode(false);
+      state.bondSelection.clear();
+      if (state.selected && state.selected.type === 'bond') {
+        const bond = state.bonds.get(state.selected.id);
+        if (bond) {
+          state.activeBondId = bond.id;
+          bond.links.forEach((linkId) => state.bondSelection.add(linkId));
+        } else {
+          state.activeBondId = null;
+        }
+      } else {
+        state.activeBondId = null;
+      }
+    } else {
+      state.bondSelection.clear();
+      state.activeBondId = null;
     }
     stage.classList.toggle('bond-mode', state.bondMode);
     highlightSelection();
     if (bondModeBtn) bondModeBtn.textContent = state.bondMode ? 'Exit Bond Mode' : 'Start Bond Mode';
+  }
+
+  function applyBondSelection() {
+    const links = Array.from(state.bondSelection).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    if (links.length < 2) {
+      if (state.activeBondId) {
+        removeBond(state.activeBondId);
+        state.bondSelection.clear();
+      }
+      return { success: true, bond: null };
+    }
+    const sharedNodes = getSharedNodes(links);
+    if (!sharedNodes.size) return { success: false };
+    if (state.activeBondId) {
+      const bond = state.bonds.get(state.activeBondId);
+      if (bond) {
+        bond.links = links.slice();
+        bond.sharedNodes = Array.from(sharedNodes);
+        updateBondGraphics(bond);
+        updateArtboardExtents();
+        return { success: true, bond };
+      }
+      state.activeBondId = null;
+    }
+    const bond = createBond(links, { sharedNodes: Array.from(sharedNodes) });
+    if (bond) {
+      state.activeBondId = bond.id;
+      updateArtboardExtents();
+      return { success: true, bond };
+    }
+    return { success: false };
   }
 
   function clearCanvas(confirmPrompt = true) {
@@ -928,7 +1190,17 @@
     state.bondCounter = 1;
     state.selected = null;
     state.linkStart = null;
-    state.bondPending = null;
+    state.bondSelection.clear();
+    state.activeBondId = null;
+    state.artboardWidth = MIN_ARTBOARD_WIDTH;
+    state.artboardHeight = MIN_ARTBOARD_HEIGHT;
+    applyArtboardSize();
+    if (typeof stage.scrollTo === 'function') {
+      stage.scrollTo({ left: 0, top: 0, behavior: 'auto' });
+    } else {
+      stage.scrollLeft = 0;
+      stage.scrollTop = 0;
+    }
     setLinkMode(false);
     setBondMode(false);
     clearInspector();
@@ -960,7 +1232,7 @@
       bonds: Array.from(state.bonds.values()).map((bond) => ({
         id: bond.id,
         links: [...bond.links],
-        sharedNode: bond.sharedNode,
+        sharedNodes: Array.isArray(bond.sharedNodes) ? bond.sharedNodes.slice() : [],
         label: bond.label,
       })),
     };
@@ -977,13 +1249,15 @@
 
   function exportTopologyImage() {
     refreshAllPositions();
-    const rect = stage.getBoundingClientRect();
-    const width = Math.round(rect.width);
-    const height = Math.round(rect.height);
-    if (!width || !height) {
-      window.alert('Canvas is empty.');
-      return;
-    }
+    updateArtboardExtents();
+    const bounds = computeContentBounds();
+    const margin = 80;
+    const exportMinX = Math.max(bounds.minX - margin, 0);
+    const exportMinY = Math.max(bounds.minY - margin, 0);
+    const exportMaxX = bounds.maxX + margin;
+    const exportMaxY = bounds.maxY + margin;
+    const width = Math.max(1, Math.ceil(exportMaxX - exportMinX));
+    const height = Math.max(1, Math.ceil(exportMaxY - exportMinY));
     const scale = Math.min((window.devicePixelRatio || 1) * 1.5, 3);
     const canvasEl = document.createElement('canvas');
     canvasEl.width = width * scale;
@@ -998,18 +1272,25 @@
     ctx.fillStyle = '#0b1224';
     ctx.fillRect(0, 0, width, height);
 
-    // subtle grid
+    const gridSize = 48;
+    const gridStartX = Math.floor(exportMinX / gridSize) * gridSize;
+    const gridStartY = Math.floor(exportMinY / gridSize) * gridSize;
+    const gridEndX = exportMaxX;
+    const gridEndY = exportMaxY;
+
+    ctx.save();
+    ctx.translate(-exportMinX, -exportMinY);
+
     ctx.strokeStyle = 'rgba(30, 41, 59, 0.6)';
     ctx.lineWidth = 1;
-    const gridSize = 48;
     ctx.beginPath();
-    for (let x = gridSize; x < width; x += gridSize) {
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, height);
+    for (let x = gridStartX; x <= gridEndX; x += gridSize) {
+      ctx.moveTo(x, exportMinY);
+      ctx.lineTo(x, exportMaxY);
     }
-    for (let y = gridSize; y < height; y += gridSize) {
-      ctx.moveTo(0, y);
-      ctx.lineTo(width, y);
+    for (let y = gridStartY; y <= gridEndY; y += gridSize) {
+      ctx.moveTo(exportMinX, y);
+      ctx.lineTo(exportMaxX, y);
     }
     ctx.stroke();
 
@@ -1064,26 +1345,30 @@
       }
     });
 
-    const bondStroke = 'rgba(56,189,248,0.82)';
+    const bondStroke = 'rgba(56,189,248,0.85)';
+    const bondFill = 'rgba(56,189,248,0.18)';
     state.bonds.forEach((bond) => {
       const geom = computeBondGeometry(bond);
       if (!geom) return;
-      const { pointA, pointB, control, labelPoint } = geom;
-      ctx.save();
-      ctx.strokeStyle = bondStroke;
-      ctx.lineWidth = 3;
-      ctx.setLineDash([12, 8]);
-      ctx.beginPath();
-      ctx.moveTo(pointA.x, pointA.y);
-      ctx.quadraticCurveTo(control.x, control.y, pointB.x, pointB.y);
-      ctx.stroke();
-      ctx.restore();
-      const text = bond.label || 'Bond';
-      ctx.fillStyle = labelColor;
-      ctx.font = '700 12px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(text, labelPoint.x, labelPoint.y);
+      geom.markers.forEach((marker) => {
+        ctx.save();
+        ctx.strokeStyle = bondStroke;
+        ctx.fillStyle = bondFill;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(marker.center.x, marker.center.y, marker.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      });
+      const text = String(bond.label || '').trim();
+      if (text) {
+        ctx.fillStyle = labelColor;
+        ctx.font = '700 12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text, geom.labelPoint.x, geom.labelPoint.y);
+      }
     });
 
     state.nodes.forEach((node) => {
@@ -1135,6 +1420,8 @@
       }
     });
 
+    ctx.restore();
+
     try {
       const dataUrl = canvasEl.toDataURL('image/jpeg', 0.92);
       const link = document.createElement('a');
@@ -1184,18 +1471,23 @@
     if (Array.isArray(data.bonds)) {
       data.bonds.forEach((bond) => {
         if (!bond || !Array.isArray(bond.links) || bond.links.length < 2) return;
-        const [linkAId, linkBId] = bond.links;
-        if (!state.links.has(linkAId) || !state.links.has(linkBId)) return;
-        createBond(linkAId, linkBId, {
+        const validLinks = bond.links.filter((linkId) => state.links.has(linkId));
+        if (validLinks.length < 2) return;
+        const sharedNodes = Array.isArray(bond.sharedNodes)
+          ? bond.sharedNodes
+          : (bond.sharedNode ? [bond.sharedNode] : undefined);
+        createBond(validLinks, {
           id: bond.id,
           label: bond.label,
-          sharedNode: bond.sharedNode,
+          sharedNodes,
         });
       });
     }
 
+    updateArtboardExtents();
     highlightSelection();
     refreshAllPositions();
+    centerViewOnContent('auto');
   }
 
   // --- Form bindings ---
@@ -1292,6 +1584,7 @@
       if (!bond) return;
       bond.label = bondLabelInput.value;
       updateBondGraphics(bond);
+      updateArtboardExtents();
     });
   }
   if (deleteBondBtn) {
@@ -1326,22 +1619,30 @@
     const type = e.dataTransfer?.getData('text/plain');
     if (!type) return;
     const rect = stage.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    const x = e.clientX - rect.left + stage.scrollLeft;
+    const y = e.clientY - rect.top + stage.scrollTop;
     const node = spawnNode(type, { x: x - 80, y: y - 40 });
     if (node) selectNode(node.id);
   });
 
   stage.addEventListener('click', (e) => {
     if (e.target === stage || e.target === linkLayer) {
-      state.bondPending = null;
+      if (state.bondMode) {
+        state.bondSelection.clear();
+        state.activeBondId = null;
+        highlightSelection();
+      }
       selectNone();
     }
   });
 
   linkLayer.addEventListener('click', (e) => {
     if (e.target === linkLayer) {
-      state.bondPending = null;
+      if (state.bondMode) {
+        state.bondSelection.clear();
+        state.activeBondId = null;
+        highlightSelection();
+      }
       selectNone();
     }
   });
@@ -1353,8 +1654,17 @@
   });
   bondModeBtn?.addEventListener('click', () => setBondMode(!state.bondMode));
   cancelBondBtn?.addEventListener('click', () => {
-    state.bondPending = null;
+    state.bondSelection.clear();
+    state.activeBondId = null;
     highlightSelection();
+  });
+  toggleSnapBtn?.addEventListener('click', () => {
+    state.snapToGrid = !state.snapToGrid;
+    highlightSelection();
+  });
+  fitViewBtn?.addEventListener('click', () => {
+    updateArtboardExtents();
+    centerViewOnContent();
   });
   clearBtn?.addEventListener('click', () => clearCanvas(true));
   exportBtn?.addEventListener('click', exportTopology);
@@ -1384,6 +1694,8 @@
     window.addEventListener('resize', requestFullRefresh);
   }
 
+  applyArtboardSize();
+  updateArtboardExtents();
   highlightSelection();
   setupResizeWatcher();
   refreshAllPositions();

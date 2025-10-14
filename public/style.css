@@ -201,7 +201,8 @@ h1 { margin: 0; font-size: 18px; letter-spacing: .3px; }
   border-radius: 14px;
   background: rgba(15,23,42,0.9);
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02), 0 18px 40px rgba(15,23,42,0.6);
-  overflow: hidden;
+  overflow: auto;
+  touch-action: pan-x pan-y;
 }
 .workspace-stage.link-mode {
   outline: 2px dashed rgba(96,165,250,0.75);
@@ -226,7 +227,8 @@ h1 { margin: 0; font-size: 18px; letter-spacing: .3px; }
 }
 #link-layer, #topology-canvas {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
 }
 #link-layer {
   z-index: 1;
@@ -340,26 +342,23 @@ h1 { margin: 0; font-size: 18px; letter-spacing: .3px; }
   fill: #bfdbfe;
 }
 
-.bond-group {
-  cursor: pointer;
-}
-.bond-path {
-  fill: none;
-  stroke: rgba(96,165,250,0.9);
+.bond-group { cursor: pointer; }
+.bond-circle {
+  fill: rgba(59,130,246,0.18);
+  stroke: rgba(96,165,250,0.85);
   stroke-width: 3;
-  stroke-dasharray: 8 6;
 }
-.bond-group.selected .bond-path {
+.bond-group.selected .bond-circle {
   stroke: #22d3ee;
-  stroke-width: 4;
-  stroke-dasharray: 0;
+  stroke-width: 3.5;
+  fill: rgba(34,211,238,0.22);
 }
 .bond-label {
   fill: var(--text);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   text-anchor: middle;
-  dominant-baseline: central;
+  dominant-baseline: middle;
   pointer-events: none;
   paint-order: stroke;
   stroke: rgba(15,23,42,0.8);
