@@ -15,10 +15,11 @@
   const exportJpgBtn = document.getElementById('export-topology-jpg');
   const importInput = document.getElementById('import-topology');
   let bondsSvgLayer = document.getElementById('bond-layer');
-  if (!linkLayer) return;
   if (!bondsSvgLayer) {
-    bondsSvgLayer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    bondsSvgLayer = document.createElementNS(SVG_NS, 'g');
     bondsSvgLayer.setAttribute('id', 'bond-layer');
+    linkLayer.appendChild(bondsSvgLayer);
+  } else if (bondsSvgLayer.parentNode !== linkLayer) {
     linkLayer.appendChild(bondsSvgLayer);
   }
 
@@ -192,6 +193,18 @@
     };
   }
 
+  function getParallelLinks(link) {
+    const result = [];
+    state.links.forEach((candidate) => {
+      if (!candidate) return;
+      const samePair =
+        (candidate.from === link.from && candidate.to === link.to) ||
+        (candidate.from === link.to && candidate.to === link.from);
+      if (samePair) result.push(candidate);
+    });
+    return result;
+  }
+
   function drawRoundedRectPath(ctx, x, y, width, height, radius) {
     const r = Math.max(Math.min(radius, width / 2, height / 2), 2);
     ctx.beginPath();
@@ -249,6 +262,16 @@
     refreshSvgSize();
     state.links.forEach((link) => updateLinkGraphics(link));
     state.bonds.forEach((bond) => updateBondGraphics(bond));
+  }
+
+  let pendingFullRefresh = false;
+  function requestFullRefresh() {
+    if (pendingFullRefresh) return;
+    pendingFullRefresh = true;
+    requestAnimationFrame(() => {
+      pendingFullRefresh = false;
+      refreshAllPositions();
+    });
   }
 
   function updateEmptyState() {
@@ -364,7 +387,35 @@
   function updateLinkGraphics(link) {
     const geom = computeLinkGeometry(link);
     if (!geom) return;
-    const { fromPoint, toPoint, midX, midY, perpX, perpY, dirX, dirY } = geom;
+    const siblings = getParallelLinks(link);
+    let { fromPoint, toPoint, midX, midY, perpX, perpY, dirX, dirY } = geom;
+    if (siblings.length > 1) {
+      const sorted = siblings.slice().sort((a, b) => a.id.localeCompare(b.id));
+      const index = sorted.findIndex((candidate) => candidate.id === link.id);
+      const step = 24;
+      const offset = (index - (sorted.length - 1) / 2) * step;
+      const shiftX = perpX * offset;
+      const shiftY = perpY * offset;
+      const targetForFrom = {
+        x: geom.toMetrics.centerX + shiftX,
+        y: geom.toMetrics.centerY + shiftY,
+      };
+      const targetForTo = {
+        x: geom.fromMetrics.centerX + shiftX,
+        y: geom.fromMetrics.centerY + shiftY,
+      };
+      fromPoint = projectToRectEdge(geom.fromMetrics, targetForFrom.x, targetForFrom.y);
+      toPoint = projectToRectEdge(geom.toMetrics, targetForTo.x, targetForTo.y);
+      const dx = toPoint.x - fromPoint.x;
+      const dy = toPoint.y - fromPoint.y;
+      const length = Math.hypot(dx, dy) || 1;
+      dirX = dx / length;
+      dirY = dy / length;
+      perpX = -dirY;
+      perpY = dirX;
+      midX = (fromPoint.x + toPoint.x) / 2;
+      midY = (fromPoint.y + toPoint.y) / 2;
+    }
     link.line.setAttribute('x1', String(fromPoint.x));
     link.line.setAttribute('y1', String(fromPoint.y));
     link.line.setAttribute('x2', String(toPoint.x));
@@ -390,7 +441,18 @@
     link.aText.setAttribute('y', String(fromPoint.y + perpY * endpointOffset + dirY * alongOffset));
     link.bText.setAttribute('x', String(toPoint.x - perpX * endpointOffset - dirX * alongOffset));
     link.bText.setAttribute('y', String(toPoint.y - perpY * endpointOffset - dirY * alongOffset));
-    link._geom = geom;
+    link._geom = {
+      fromPoint,
+      toPoint,
+      midX,
+      midY,
+      perpX,
+      perpY,
+      dirX,
+      dirY,
+      fromMetrics: geom.fromMetrics,
+      toMetrics: geom.toMetrics,
+    };
     updateBondsForLink(link.id);
   }
 
@@ -435,7 +497,6 @@
       selectBond(id);
     });
     bondsSvgLayer.appendChild(group);
-    linkLayer.appendChild(bondsSvgLayer);
     return { group, path, labelText };
   }
 
@@ -522,8 +583,8 @@
     }
   }
 
-  function setNodePosition(node, x, y) {
-    const rect = stage.getBoundingClientRect();
+  function setNodePosition(node, x, y, rectOverride) {
+    const rect = rectOverride || stage.getBoundingClientRect();
     const nodeWidth = node.el.offsetWidth || 0;
     const nodeHeight = node.el.offsetHeight || 0;
     const minX = 8;
@@ -544,6 +605,7 @@
     if (!node) return;
     selectNode(id);
     const rect = stage.getBoundingClientRect();
+    node.dragStageRect = rect;
     node.dragOffset = {
       x: event.clientX - rect.left - node.x,
       y: event.clientY - rect.top - node.y,
@@ -554,16 +616,17 @@
   function dragNode(id, event) {
     const node = state.nodes.get(id);
     if (!node || !node.dragOffset) return;
-    const rect = stage.getBoundingClientRect();
+    const rect = node.dragStageRect || stage.getBoundingClientRect();
     const x = event.clientX - rect.left - node.dragOffset.x;
     const y = event.clientY - rect.top - node.dragOffset.y;
-    setNodePosition(node, x, y);
+    setNodePosition(node, x, y, rect);
   }
 
   function finishNodeDrag(id) {
     const node = state.nodes.get(id);
     if (!node) return;
     node.dragOffset = null;
+    delete node.dragStageRect;
     node.el.classList.remove('dragging');
   }
 
@@ -609,7 +672,6 @@
     line.addEventListener('click', handleClick);
 
     linkLayer.appendChild(group);
-    linkLayer.appendChild(bondsSvgLayer);
     return { group, line, labelText, aText, bText, notesText };
   }
 
@@ -736,7 +798,7 @@
       dragOffset: null,
     };
 
-    setNodePosition(node, node.x, node.y);
+    setNodePosition(node, node.x, node.y, rect);
     state.nodes.set(id, node);
     updateNodeAppearance(node);
     updateEmptyState();
@@ -956,7 +1018,7 @@
     const noteColor = '#9ca3af';
 
     state.links.forEach((link) => {
-      const geom = computeLinkGeometry(link);
+      const geom = link._geom || computeLinkGeometry(link);
       if (!geom) return;
       const { fromPoint, toPoint, midX, midY, perpX, perpY, dirX, dirY } = geom;
 
@@ -1316,11 +1378,10 @@
 
   function setupResizeWatcher() {
     if (window.ResizeObserver) {
-      const observer = new ResizeObserver(() => refreshAllPositions());
+      const observer = new ResizeObserver(() => requestFullRefresh());
       observer.observe(stage);
-    } else {
-      window.addEventListener('resize', refreshAllPositions);
     }
+    window.addEventListener('resize', requestFullRefresh);
   }
 
   highlightSelection();
