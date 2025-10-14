@@ -244,6 +244,11 @@ app.post('/pad/:room/files/:file/delete', requireAuth, (req, res) => {
   }
 });
 
+// Tools: Topology Sandbox
+app.get('/tools/topology-sandbox', requireAuth, (_req, res) => {
+  res.render('topology', { title: 'Topology Sandbox' });
+});
+
 // Tools: PDF -> JPG
 app.get('/tools/pdf-to-jpg', requireAuth, (_req, res) => {
   res.render('tool_pdf_to_jpg', { title: 'PDF → JPG' });
