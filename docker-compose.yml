@@ -6,9 +6,7 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3000
-      # set these via a .env file or inline before `docker compose up`
-      - SHARED_PASSWORD=${SHARED_PASSWORD}
-      - SESSION_KEY=${SESSION_KEY}
+      - DRAW_IO_URL=${DRAW_IO_URL:-http://127.0.0.1:8080/?embed=1&ui=atlas&spin=1&proto=json}
     ports:
       - "9550:3000"
     volumes:

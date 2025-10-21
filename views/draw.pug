@@ -1,0 +1,16 @@
+extends layout
+
+block content
+  header.appbar
+    a.back(href="/" title="Back to home") ← Back
+    h1 Diagram Workspace
+    div.status Embedded diagrams.net (draw.io) session inside your toolset.
+
+  main.container.draw-container
+    .draw-embed-shell
+      iframe.draw-embed(
+        src=drawIoUrl
+        title="Embedded diagrams.net editor"
+        frameborder="0"
+        allowfullscreen
+      )

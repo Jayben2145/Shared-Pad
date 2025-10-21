@@ -8,7 +8,7 @@ Collaborative Node.js workspace with a realtime shared pad, lightweight tools hu
 
 - Shared pads per room key, saved under `data/pads/<room>.json`
 - Instant multi-user editing over Socket.IO with optional file uploads per room
-- **Topology sandbox** with drag/drop nodes, redundant link bonding, snap-to-grid, and JSON/JPG export
+- **Diagram workspace** that embeds your self-hosted diagrams.net (draw.io) instance inside the tools UI
 - PDF to JPG conversion (single JPG or ZIP of JPGs) powered by `pdftoppm`
 - Docker support (Compose and plain Docker) with persistent storage volume
 - Basic health check at `GET /health`
@@ -42,9 +42,8 @@ Collaborative Node.js workspace with a realtime shared pad, lightweight tools hu
 ```bash
 npm install
 
-# Optional: configure auth before starting (see Configuration)
-export SHARED_PASSWORD="super-secret"
-export SESSION_KEY="$(node -e "console.log(require('crypto').randomBytes(32).toString('base64'))")"
+# Optional: point at your self-hosted draw.io instance
+export DRAW_IO_URL="/internal/drawio/?ui=atlas&spin=1"
 
 npm run start   # or npm run dev (uses nodemon)
 ```
@@ -55,8 +54,8 @@ Visit `http://localhost:3000`.
 
 ```bash
 # .env (same dir as docker-compose.yml)
-SHARED_PASSWORD=super-secret
-SESSION_KEY=base64-key-from-node-command
+# optional: point to your draw.io proxy path or host
+# DRAW_IO_URL=/internal/drawio/?ui=atlas&spin=1
 
 docker compose up -d
 ```
@@ -70,8 +69,7 @@ docker build -t shared-pad .
 docker run -d \
   --name shared-pad \
   -e NODE_ENV=production \
-  -e SHARED_PASSWORD=super-secret \
-  -e SESSION_KEY=base64-key-from-node-command \
+  -e DRAW_IO_URL=/internal/drawio/?ui=atlas&spin=1 \
   -p 9550:3000 \
   -v sharedpad-data:/usr/src/app/data \
   shared-pad
@@ -83,22 +81,8 @@ docker run -d \
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `SHARED_PASSWORD` | Shared password required to access any route. Leave unset to allow anonymous access. | _(empty)_ |
-| `SESSION_KEY` | Secret used to sign session cookies. Must be a long random string when `SHARED_PASSWORD` is set. | `dev-unsafe-key` |
 | `PORT` | Express listen port inside the container/process. | `3000` |
-
-Generate a secure session key:
-
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
-```
-
-Add the resulting value to your shell exports, `.env`, secrets manager, or Compose environment.
-
-### Rate limiting & sessions
-
-- Cookie sessions last 24 hours (`sid` cookie, SameSite=Lax).
-- Login attempts are limited to 10 per 15 minutes per IP.
+| `DRAW_IO_URL` | URL (or same-origin proxy path) for the embedded diagrams.net editor. | `http://127.0.0.1:8080/?embed=1&ui=atlas&spin=1&proto=json` |
 
 ### Storage layout
 
@@ -118,24 +102,15 @@ Add the resulting value to your shell exports, `.env`, secrets manager, or Compo
 | `POST` | `/pad/:room/files` | Upload file to pad |
 | `GET` | `/tools/pdf-to-jpg` | PDF → JPG form |
 | `POST` | `/tools/pdf-to-jpg` | Handle PDF conversion |
-| `GET` | `/tools/topology-sandbox` | Network topology sandbox |
+| `GET` | `/tools/draw` | Embedded draw.io workspace |
 | `GET` | `/health` | JSON health check |
 
-## Topology sandbox
+## Diagram workspace (draw.io)
 
-The sandbox is aimed at quick network planning sketches:
-
-- Drag nodes (router, switch, firewall, server, cloud, workstation) from the palette or click to drop them in the canvas.
-- Connect nodes in **Link mode**; parallel links automatically fan out so each interface is visible.
-- Group redundant circuits with **Bond mode**. Bonds draw per-device rings around the participating links. Add as many member links as you need.
-- Use the toolbar to toggle **Snap Grid** (20 px) and **Center View**, or clear/export/import.
-- The canvas auto-expands with scrollbars so zooming the browser never hides equipment off-screen.
-- Export options:
-  - **JSON** – retains node/link/bond metadata for re-importing later.
-  - **JPG** – crops to the minimal bounding rectangle covering every node/link/bond, so off-screen items are preserved in the snapshot.
-- Bonds default to blank labels to keep diagrams tidy; add a label only when you need one in the inspector.
-
-> Tip: After importing or building a large design, press **Center View** to reframe the canvas. Use Snap Grid for neat alignment, or leave it off for free-form placement.
+- The `/tools/draw` route wraps an `<iframe>` that points at the URL you supply via `DRAW_IO_URL`.
+- For best results, keep the editor on the same origin by reverse-proxying your draw.io container (e.g. `/internal/drawio/`) and set `DRAW_IO_URL` to that relative path. This avoids mixed-content errors and allows embedding when HTTPS is in use.
+- If you expose the editor on a separate host, ensure it is available over HTTPS and permits embedding by relaxing `X-Frame-Options` / `frame-ancestors` headers to include your tools domain.
+- Legacy `/tools/topology-sandbox` requests are redirected to `/tools/draw`.
 
 ## PDF → JPG conversion
 
@@ -147,7 +122,7 @@ The sandbox is aimed at quick network planning sketches:
 
 ## Security notes
 
-- No user accounts; access is all-or-nothing via `SHARED_PASSWORD`
+- No built-in user accounts; protect the site with your reverse proxy (HTTP auth, SSO, VPN, etc.)
 - No TLS termination; run behind HTTPS reverse proxy in production
 - Uploaded files are stored on disk until cleaned up; avoid handling sensitive data
 

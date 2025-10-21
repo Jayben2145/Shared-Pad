@@ -5,6 +5,7 @@
   --muted: #9ca3af;
   --accent: #60a5fa;
   --ok: #34d399;
+  --appbar-height: 60px;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -22,6 +23,7 @@ body {
   padding: 12px 16px; background: rgba(17,24,39,0.75); backdrop-filter: blur(8px);
   border-bottom: 1px solid rgba(255,255,255,0.08);
   position: sticky; top: 0; z-index: 10;
+  min-height: var(--appbar-height);
 }
 h1 { margin: 0; font-size: 18px; letter-spacing: .3px; }
 .status { display: flex; gap: 12px; font-size: 13px; color: var(--muted); }
@@ -428,6 +430,44 @@ h1 { margin: 0; font-size: 18px; letter-spacing: .3px; }
 .topology-panel textarea:focus {
   border-color: rgba(96,165,250,0.8);
   box-shadow: 0 0 0 3px rgba(96,165,250,0.25);
+}
+
+.container.draw-container {
+  max-width: none;
+  width: 100%;
+  margin: 0;
+  padding: 24px;
+  height: calc(100vh - var(--appbar-height) - 24px);
+  display: flex;
+  flex-direction: column;
+}
+
+.draw-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 16px;
+}
+
+.draw-embed-shell {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  background: rgba(15,24,51,0.72);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+.draw-embed {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #0f172a;
 }
 
 @media (max-width: 1080px) {

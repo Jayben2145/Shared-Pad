@@ -6,44 +6,21 @@ const { Server } = require('socket.io');
 const multer = require('multer');
 const { spawn } = require('child_process');
 const archiver = require('archiver');
-const rateLimit = require('express-rate-limit');
-const cookieSession = require('cookie-session');
 
-const SHARED_PASSWORD = process.env.SHARED_PASSWORD || ''; // set this in prod
 const PORT = process.env.PORT || 3000;
+const DRAW_IO_URL = process.env.DRAW_IO_URL || 'http://127.0.0.1:8080/?embed=1&ui=atlas&spin=1&proto=json';
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-/* ------------ IMPORTANT: trust proxy for rate-limit & proxies ----------- */
+/* ------------ IMPORTANT: trust proxy when running behind a proxy ----------- */
 app.set('trust proxy', 1); // adjust if you have more than one proxy hop
 
 app.set('view engine', 'pug');
 app.set('views', path.join(__dirname, 'views'));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.urlencoded({ extended: false }));
-
-// sessions (signed cookies)
-app.use(cookieSession({
-  name: 'sid',
-  keys: [process.env.SESSION_KEY || 'dev-unsafe-key'],
-  maxAge: 24 * 60 * 60 * 1000, // 1 day
-  sameSite: 'lax',
-}));
-
-// --- auth helpers ---
-function requireAuth(req, res, next) {
-  if (!SHARED_PASSWORD) return next();     // if no password set, open access
-  if (req.session && req.session.authed === true) return next();
-  return res.redirect('/login?next=' + encodeURIComponent(req.originalUrl || '/'));
-}
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15m
-  max: 10, // 10 attempts per IP per window
-  standardHeaders: true,
-  legacyHeaders: false,
-});
 
 // --- utils & storage dirs ---
 const DATA_DIR = path.join(__dirname, 'data');
@@ -140,39 +117,20 @@ function safeCleanup(paths) { for (const p of paths) fs.unlink(p, () => {}); }
 // ----------------------------- routes ------------------------------
 
 // login
-app.get('/login', (req, res) => {
-  if (!SHARED_PASSWORD) return res.redirect('/'); // auth disabled
-  const next = typeof req.query.next === 'string' ? req.query.next : '/';
-  res.render('login', { title: 'Login', next, error: null });
-});
-app.post('/login', loginLimiter, (req, res) => {
-  if (!SHARED_PASSWORD) return res.redirect('/');
-  const { password, next } = req.body || {};
-  if (typeof password === 'string' && password === SHARED_PASSWORD) {
-    req.session.authed = true;
-    return res.redirect(next && next.startsWith('/') ? next : '/');
-  }
-  res.status(401).render('login', { title: 'Login', next: next || '/', error: 'Incorrect password.' });
-});
-app.post('/logout', (req, res) => {
-  req.session = null;
-  res.redirect('/');
-});
-
-// Home (tools hub) - protected
-app.get('/', requireAuth, (_req, res) => {
+// Home (tools hub)
+app.get('/', (_req, res) => {
   res.render('index', { title: 'Tools' });
 });
 
 // Pads: index (enter key / generate) and handle ?room=XYZ
-app.get('/pad', requireAuth, (req, res) => {
+app.get('/pad', (req, res) => {
   const room = sanitizeRoom(req.query.room);
   if (room) return res.redirect(`/pad/${room}`);
   res.render('pad-index', { title: 'Shared Pad' });
 });
 
 // Specific pad
-app.get('/pad/:room', requireAuth, (req, res) => {
+app.get('/pad/:room', (req, res) => {
   const room = sanitizeRoom(req.params.room);
   if (!room) return res.redirect('/pad');
   loadPad(room);
@@ -181,7 +139,7 @@ app.get('/pad/:room', requireAuth, (req, res) => {
 });
 
 // NEW: JSON list of files for a pad (for reliable live refresh)
-app.get('/pad/:room/files.json', requireAuth, (req, res) => {
+app.get('/pad/:room/files.json', (req, res) => {
   const room = sanitizeRoom(req.params.room);
   if (!room) return res.status(400).json({ files: [] });
   try {
@@ -192,7 +150,7 @@ app.get('/pad/:room/files.json', requireAuth, (req, res) => {
 });
 
 // Upload file to pad
-app.post('/pad/:room/files', requireAuth, uploadAny.single('file'), (req, res) => {
+app.post('/pad/:room/files', uploadAny.single('file'), (req, res) => {
   try {
     const room = sanitizeRoom(req.params.room);
     if (!room) return res.redirect('/pad');
@@ -218,7 +176,7 @@ app.post('/pad/:room/files', requireAuth, uploadAny.single('file'), (req, res) =
 });
 
 // Download a file from pad
-app.get('/pad/:room/files/:file', requireAuth, (req, res) => {
+app.get('/pad/:room/files/:file', (req, res) => {
   const room = sanitizeRoom(req.params.room);
   const file = sanitizeFilename(req.params.file);
   const full = path.join(padFilesDir(room), file);
@@ -227,7 +185,7 @@ app.get('/pad/:room/files/:file', requireAuth, (req, res) => {
 });
 
 // Delete a file from pad
-app.post('/pad/:room/files/:file/delete', requireAuth, (req, res) => {
+app.post('/pad/:room/files/:file/delete', (req, res) => {
   const room = sanitizeRoom(req.params.room);
   const file = sanitizeFilename(req.params.file);
   const full = path.join(padFilesDir(room), file);
@@ -244,16 +202,19 @@ app.post('/pad/:room/files/:file/delete', requireAuth, (req, res) => {
   }
 });
 
-// Tools: Topology Sandbox
-app.get('/tools/topology-sandbox', requireAuth, (_req, res) => {
-  res.render('topology', { title: 'Topology Sandbox' });
+// Tools: Diagram workspace
+app.get('/tools/draw', (_req, res) => {
+  res.render('draw', { title: 'Diagram Workspace', drawIoUrl: DRAW_IO_URL });
+});
+app.get('/tools/topology-sandbox', (_req, res) => {
+  res.redirect('/tools/draw');
 });
 
 // Tools: PDF -> JPG
-app.get('/tools/pdf-to-jpg', requireAuth, (_req, res) => {
+app.get('/tools/pdf-to-jpg', (_req, res) => {
   res.render('tool_pdf_to_jpg', { title: 'PDF → JPG' });
 });
-app.post('/tools/pdf-to-jpg', requireAuth, uploadPDF.single('pdf'), async (req, res) => {
+app.post('/tools/pdf-to-jpg', uploadPDF.single('pdf'), async (req, res) => {
   try {
     const quality = Math.min(100, Math.max(1, parseInt(req.body.quality || '85', 10)));
     const width = req.body.width && req.body.width !== 'auto' ? Math.min(4096, Math.max(300, parseInt(req.body.width, 10))) : null;
@@ -293,7 +254,7 @@ app.post('/tools/pdf-to-jpg', requireAuth, uploadPDF.single('pdf'), async (req, 
 });
 
 // health
-app.get('/health', (_req, res) => res.json({ ok: true, pads: Object.keys(pads).length, auth: !!SHARED_PASSWORD }));
+app.get('/health', (_req, res) => res.json({ ok: true, pads: Object.keys(pads).length }));
 
 /* --------------------------- sockets (pads) ------------------------ */
 io.on('connection', (socket) => {
